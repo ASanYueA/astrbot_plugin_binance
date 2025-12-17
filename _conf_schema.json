@@ -1,0 +1,11 @@
+{
+  "api_key": {
+    "description": "Binance API Key（可留空，仅查询公开数据）",
+    "type": "string",
+    "hint": "如果需要访问私有接口才需配置"
+  },
+  "secret_key": {
+    "description": "Binance Secret Key（可留空）",
+    "type": "string"
+  }
+}
