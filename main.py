@@ -16,7 +16,7 @@ BINANCE_BASE = "https://api.binance.com/api/v3"
 SAPI_BASE = "https://api.binance.com/sapi/v1"
 
 
-@register("astrbot_plugin_binance", "YourName", "Binance 全功能插件（Aiocqhttp/OneBot 异步生成器版）", "1.5.0")
+@register("astrbot_plugin_binance", "YourName", "Binance 全功能插件（Alpha账户修复版）", "1.6.0")
 class BinancePlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
@@ -71,7 +71,10 @@ class BinancePlugin(Star):
                 resp = await client.get(f"{BINANCE_BASE}/account", params=spot_params, headers=headers)
                 spot_data = resp.json()
                 spot_assets = [f"{b['asset']}: {b['free']}" for b in spot_data.get("balances", []) if float(b['free']) > 0]
-                results.append("现货账户:\n" + "\n".join(spot_assets))
+                if spot_assets:
+                    results.append("现货账户:\n" + "\n".join(spot_assets))
+                else:
+                    results.append("现货账户:\n没有可用资产")
             except Exception as e:
                 results.append(f"现货账户查询失败: {e}")
 
@@ -82,7 +85,10 @@ class BinancePlugin(Star):
                 resp = await client.get(f"{SAPI_BASE}/margin/account", params=margin_params, headers=headers)
                 margin_data = resp.json()
                 margin_assets = [f"{b['asset']}: {b['free']}" for b in margin_data.get("userAssets", []) if float(b['free']) > 0]
-                results.append("杠杆账户:\n" + "\n".join(margin_assets))
+                if margin_assets:
+                    results.append("杠杆账户:\n" + "\n".join(margin_assets))
+                else:
+                    results.append("杠杆账户:\n没有可用资产")
             except Exception as e:
                 results.append(f"杠杆账户查询失败: {e}")
 
@@ -92,8 +98,15 @@ class BinancePlugin(Star):
                 alpha_params["signature"] = self._sign(alpha_params)
                 resp = await client.get(f"{SAPI_BASE}/asset/assetDetail", params=alpha_params, headers=headers)
                 alpha_data = resp.json()
-                alpha_assets = [f"{k}: {v['availableBalance']}" for k, v in alpha_data.items() if float(v['availableBalance']) > 0]
-                results.append("Alpha账户:\n" + "\n".join(alpha_assets))
+                alpha_assets = []
+                for k, v in alpha_data.items():
+                    available = v.get('availableBalance', None)
+                    if available is not None and float(available) > 0:
+                        alpha_assets.append(f"{k}: {available}")
+                if alpha_assets:
+                    results.append("Alpha账户:\n" + "\n".join(alpha_assets))
+                else:
+                    results.append("Alpha账户:\n没有可用资产")
             except Exception as e:
                 results.append(f"Alpha账户查询失败: {e}")
 
