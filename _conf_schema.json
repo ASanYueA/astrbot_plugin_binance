@@ -9,7 +9,7 @@
   },
   "push_interval": {
     "description": "定时推送价格间隔（秒），0 表示不推送",
-    "type": "number",
+    "type": "int",
     "default": 0
   },
   "push_symbol": {
