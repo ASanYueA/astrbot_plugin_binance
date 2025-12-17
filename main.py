@@ -15,7 +15,7 @@ BINANCE_BASE = "https://api.binance.com/api/v3"
 SAPI_BASE = "https://api.binance.com/sapi/v1"
 
 
-@register("astrbot_plugin_binance", "YourName", "Binance 全功能插件", "1.1.0")
+@register("astrbot_plugin_binance", "YourName", "Binance 全功能插件", "1.2.0")
 class BinancePlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
@@ -155,5 +155,7 @@ class BinancePlugin(Star):
         symbol = parts[1]
         interval = parts[2] if len(parts) > 2 else "1h"
         limit = int(parts[3]) if len(parts) > 3 else 50
+
         buf = await self.get_kline_image(symbol, interval, limit)
-        await self.context.send_image(buf)
+        # 使用 event.reply_image 发送图片
+        await event.reply_image(buf)
