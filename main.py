@@ -16,7 +16,7 @@ BINANCE_BASE = "https://api.binance.com/api/v3"
 SAPI_BASE = "https://api.binance.com/sapi/v1"
 
 
-@register("astrbot_plugin_binance", "YourName", "Binance 全功能插件（Aiocqhttp/OneBot）", "1.4.0")
+@register("astrbot_plugin_binance", "YourName", "Binance 全功能插件（Aiocqhttp/OneBot 异步生成器版）", "1.5.0")
 class BinancePlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
@@ -152,6 +152,7 @@ class BinancePlugin(Star):
         if len(parts) < 2:
             yield event.plain_result("请在命令后输入币种，间隔，数量，例如: /kline BTCUSDT 1h 50")
             return
+
         symbol = parts[1]
         interval = parts[2] if len(parts) > 2 else "1h"
         limit = int(parts[3]) if len(parts) > 3 else 50
@@ -161,5 +162,5 @@ class BinancePlugin(Star):
         b64_data = base64.b64encode(img_bytes).decode()
         cq_code = f"[CQ:image,file=base64://{b64_data}]"
 
-        # 使用 event.send() 兼容 Aiocqhttp/OneBot
-        await event.send(cq_code)
+        # 异步生成器方式发送 CQ码
+        yield event.plain_result(cq_code)
