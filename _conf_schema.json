@@ -1,11 +1,20 @@
 {
   "api_key": {
-    "description": "Binance API Key（可留空，仅查询公开数据）",
-    "type": "string",
-    "hint": "如果需要访问私有接口才需配置"
+    "description": "Binance API Key（访问账户数据需填写）",
+    "type": "string"
   },
   "secret_key": {
-    "description": "Binance Secret Key（可留空）",
+    "description": "Binance Secret Key（访问账户数据需填写）",
     "type": "string"
+  },
+  "push_interval": {
+    "description": "定时推送价格间隔（秒），0 表示不推送",
+    "type": "number",
+    "default": 0
+  },
+  "push_symbol": {
+    "description": "定时推送的币种，例如 BTCUSDT,ETHUSDT",
+    "type": "string",
+    "default": "BTCUSDT"
   }
 }
