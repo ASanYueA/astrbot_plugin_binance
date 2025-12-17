@@ -2,12 +2,13 @@ import hmac
 import hashlib
 import time
 from io import BytesIO
+import base64
 
 import httpx
 import pandas as pd
 import mplfinance as mpf
 
-from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.event import filter
 from astrbot.api.star import Star, Context, register
 from astrbot.api import logger
 
@@ -15,7 +16,7 @@ BINANCE_BASE = "https://api.binance.com/api/v3"
 SAPI_BASE = "https://api.binance.com/sapi/v1"
 
 
-@register("astrbot_plugin_binance", "YourName", "Binance 全功能插件", "1.2.0")
+@register("astrbot_plugin_binance", "YourName", "Binance 全功能插件（Aiocqhttp/OneBot 适配）", "1.3.0")
 class BinancePlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
@@ -105,7 +106,7 @@ class BinancePlugin(Star):
             resp = await client.get(f"{BINANCE_BASE}/klines", params=params)
             data = resp.json()
 
-        # 修正列名，12列
+        # 12列
         df = pd.DataFrame(data, columns=[
             "open_time","open","high","low","close","volume",
             "close_time","quote_asset_volume","num_trades",
@@ -130,7 +131,7 @@ class BinancePlugin(Star):
 
     # -------------------- AstrBot 命令 --------------------
     @filter.command("price")
-    async def cmd_price(self, event: AstrMessageEvent):
+    async def cmd_price(self, event):
         msg = event.message_str.strip()
         parts = msg.split()
         if len(parts) < 2:
@@ -141,12 +142,12 @@ class BinancePlugin(Star):
         yield event.plain_result(result)
 
     @filter.command("account")
-    async def cmd_account(self, event: AstrMessageEvent):
+    async def cmd_account(self, event):
         result = await self.get_all_assets()
         yield event.plain_result(result)
 
     @filter.command("kline")
-    async def cmd_kline(self, event: AstrMessageEvent):
+    async def cmd_kline(self, event):
         msg = event.message_str.strip()
         parts = msg.split()
         if len(parts) < 2:
@@ -157,5 +158,7 @@ class BinancePlugin(Star):
         limit = int(parts[3]) if len(parts) > 3 else 50
 
         buf = await self.get_kline_image(symbol, interval, limit)
-        # 使用 event.reply_image 发送图片
-        await event.reply_image(buf)
+        img_bytes = buf.getvalue()
+        b64_data = base64.b64encode(img_bytes).decode()
+        cq_code = f"[CQ:image,file=base64://{b64_data}]"
+        await event.reply(cq_code)
