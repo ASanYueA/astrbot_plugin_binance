@@ -15,7 +15,7 @@ BINANCE_BASE = "https://api.binance.com/api/v3"
 SAPI_BASE = "https://api.binance.com/sapi/v1"
 
 
-@register("astrbot_plugin_binance", "YourName", "Binance 全功能插件", "1.0.0")
+@register("astrbot_plugin_binance", "YourName", "Binance 全功能插件", "1.1.0")
 class BinancePlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
@@ -105,9 +105,12 @@ class BinancePlugin(Star):
             resp = await client.get(f"{BINANCE_BASE}/klines", params=params)
             data = resp.json()
 
-        df = pd.DataFrame(data, columns=["open_time","open","high","low","close","volume","close_time",
-                                         "quote_asset_volume","num_trades","taker_buy_base",
-                                         "taker_buy_quote","ignore","ignore2"])
+        # 修正列名，12列
+        df = pd.DataFrame(data, columns=[
+            "open_time","open","high","low","close","volume",
+            "close_time","quote_asset_volume","num_trades",
+            "taker_buy_base","taker_buy_quote","ignore"
+        ])
         df["open_time"] = pd.to_datetime(df["open_time"], unit='ms')
         df.set_index("open_time", inplace=True)
         df = df[["open","high","low","close","volume"]].astype(float)
