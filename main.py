@@ -16,7 +16,7 @@ BINANCE_BASE = "https://api.binance.com/api/v3"
 SAPI_BASE = "https://api.binance.com/sapi/v1"
 
 
-@register("astrbot_plugin_binance", "YourName", "Binance 全功能插件（Aiocqhttp/OneBot 适配）", "1.3.0")
+@register("astrbot_plugin_binance", "YourName", "Binance 全功能插件（Aiocqhttp/OneBot）", "1.4.0")
 class BinancePlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
@@ -106,7 +106,6 @@ class BinancePlugin(Star):
             resp = await client.get(f"{BINANCE_BASE}/klines", params=params)
             data = resp.json()
 
-        # 12列
         df = pd.DataFrame(data, columns=[
             "open_time","open","high","low","close","volume",
             "close_time","quote_asset_volume","num_trades",
@@ -161,4 +160,6 @@ class BinancePlugin(Star):
         img_bytes = buf.getvalue()
         b64_data = base64.b64encode(img_bytes).decode()
         cq_code = f"[CQ:image,file=base64://{b64_data}]"
-        await event.reply(cq_code)
+
+        # 使用 event.send() 兼容 Aiocqhttp/OneBot
+        await event.send(cq_code)
