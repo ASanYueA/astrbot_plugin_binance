@@ -22,14 +22,44 @@ class BinanceCore:
         self.config = context.get_config()
         self.api_url = self.config.get("binance_api_url", "https://api.binance.com")
         self.timeout = self.config.get("request_timeout", 10)
-        self.encryption_key = self.config.get("encryption_key", "")
         
-        # 检查配置
-        if not self.encryption_key or self.encryption_key == "change-this-to-a-secure-random-string":
-            logger.warning("加密密钥未设置或使用默认值，存在安全风险")
+        # 加密密钥将在第一次使用时初始化
+        self.encryption_key = None
+        self.encryption_key_initialized = False
         
         # 创建aiohttp客户端会话
         self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout))
+    
+    async def _init_encryption_key(self):
+        """
+        初始化加密密钥：
+        1. 优先从持久化存储中获取
+        2. 如果没有，生成一个新的随机密钥并存储
+        """
+        if self.encryption_key_initialized:
+            return
+        
+        # 从持久化存储中获取加密密钥
+        try:
+            self.encryption_key = await self.context.get_kv_data("binance_encryption_key")
+        except Exception as e:
+            logger.error(f"从持久化存储获取加密密钥失败: {str(e)}")
+        
+        # 如果没有获取到密钥，生成一个新的随机密钥
+        if not self.encryption_key or len(self.encryption_key) < 16:
+            import secrets
+            try:
+                # 生成32位的随机字符串作为加密密钥
+                self.encryption_key = secrets.token_hex(16)  # 32个字符的十六进制字符串
+                # 存储加密密钥
+                await self.context.put_kv_data("binance_encryption_key", self.encryption_key)
+                logger.info("已生成并存储新的加密密钥")
+            except Exception as e:
+                logger.error(f"生成或存储加密密钥失败: {str(e)}")
+                # 如果生成密钥失败，使用一个默认的不安全密钥（仅作为最后的 fallback）
+                self.encryption_key = "default_fallback_key_12345678"
+        
+        self.encryption_key_initialized = True
 
     async def close(self):
         """关闭aiohttp会话"""
@@ -89,10 +119,10 @@ class BinanceCore:
         :param secret_key: 币安Secret密钥
         :return: 是否绑定成功
         """
-        if not self.encryption_key or self.encryption_key == "change-this-to-a-secure-random-string":
-            raise ValueError("encryption_key_not_set")
-        
         try:
+            # 确保加密密钥已初始化
+            await self._init_encryption_key()
+            
             # 加密API密钥
             encrypted_api_key = encrypt_data(api_key, self.encryption_key)
             encrypted_secret_key = encrypt_data(secret_key, self.encryption_key)
@@ -112,6 +142,9 @@ class BinanceCore:
         :return: (api_key, secret_key)元组，或None表示未绑定
         """
         try:
+            # 确保加密密钥已初始化
+            await self._init_encryption_key()
+            
             encrypted_api_key = await self.context.get_kv_data(f"user_{user_id}_api_key")
             encrypted_secret_key = await self.context.get_kv_data(f"user_{user_id}_secret_key")
             
@@ -219,13 +252,6 @@ class BinanceCore:
             else:
                 return "❌ API密钥绑定失败，请稍后重试"
                 
-        except ValueError as e:
-            if str(e) == "encryption_key_not_set":
-                logger.error("加密密钥未设置，无法安全存储API密钥")
-                return "❌ API密钥绑定失败：请先在插件配置中设置加密密钥（随机字符串）"
-            else:
-                logger.error(f"处理绑定命令时发生值错误: {str(e)}")
-                return "❌ API密钥绑定失败，请稍后重试"
         except Exception as e:
             logger.error(f"处理绑定命令时发生错误: {str(e)}")
             return "❌ 处理请求时发生错误，请稍后重试"
