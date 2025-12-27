@@ -107,7 +107,6 @@ AstrBot 币安插件，支持通过公共API查询各种资产价格，以及通
 - `api_futures_url`：币安合约API基础URL
 - `api_margin_url`：币安杠杆API基础URL
 - `api_alpha_url`：币安Alpha API基础URL
-- `encryption_key`：API密钥加密密钥（请确保安全）
 
 ## 安全说明
 
