@@ -89,11 +89,10 @@ class BinanceCore:
         :param secret_key: 币安Secret密钥
         :return: 是否绑定成功
         """
+        if not self.encryption_key or self.encryption_key == "change-this-to-a-secure-random-string":
+            raise ValueError("encryption_key_not_set")
+        
         try:
-            if not self.encryption_key or self.encryption_key == "change-this-to-a-secure-random-string":
-                logger.error("加密密钥未设置，无法安全存储API密钥")
-                return False
-            
             # 加密API密钥
             encrypted_api_key = encrypt_data(api_key, self.encryption_key)
             encrypted_secret_key = encrypt_data(secret_key, self.encryption_key)
@@ -220,6 +219,13 @@ class BinanceCore:
             else:
                 return "❌ API密钥绑定失败，请稍后重试"
                 
+        except ValueError as e:
+            if str(e) == "encryption_key_not_set":
+                logger.error("加密密钥未设置，无法安全存储API密钥")
+                return "❌ API密钥绑定失败：请先在插件配置中设置加密密钥（随机字符串）"
+            else:
+                logger.error(f"处理绑定命令时发生值错误: {str(e)}")
+                return "❌ API密钥绑定失败，请稍后重试"
         except Exception as e:
             logger.error(f"处理绑定命令时发生错误: {str(e)}")
             return "❌ 处理请求时发生错误，请稍后重试"
