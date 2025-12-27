@@ -1,0 +1,6 @@
+name: astrbot_plugin_binance
+display_name: 币安插件
+desc: AstrBot 币安插件。
+version: v0.1.0
+author: 三月
+repo: https://github.com/ASanYueA/astrbot_plugin_binance
