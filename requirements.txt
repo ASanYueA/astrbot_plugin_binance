@@ -1,4 +1,0 @@
-httpx>=0.24.0
-matplotlib
-mplfinance
-pandas
