@@ -92,19 +92,23 @@ class BinanceCore:
             # 标准化交易对格式
             normalized_symbol = normalize_symbol(symbol)
             
-            # 根据资产类型选择不同的API端点
+            # 根据资产类型选择不同的API域名和端点
             if asset_type == "spot":
                 # 现货API
-                url = f"{self.api_url}/api/v3/ticker/price"
+                api_domain = self.api_url
+                url = f"{api_domain}/api/v3/ticker/price"
             elif asset_type == "futures":
-                # 永续合约API
-                url = f"{self.api_url}/fapi/v1/ticker/price"
+                # 永续合约API（使用不同的域名）
+                api_domain = "https://fapi.binance.com"
+                url = f"{api_domain}/fapi/v1/ticker/price"
             elif asset_type == "margin":
                 # 杠杆API
-                url = f"{self.api_url}/sapi/v1/margin/market-price"
+                api_domain = self.api_url
+                url = f"{api_domain}/sapi/v1/margin/market-price"
             elif asset_type == "alpha":
-                # Alpha货币API（使用现货API端点，标准化时确保正确）
-                url = f"{self.api_url}/api/v3/ticker/price"
+                # Alpha货币API（使用现货API端点）
+                api_domain = self.api_url
+                url = f"{api_domain}/api/v3/ticker/price"
             else:
                 logger.error(f"不支持的资产类型: {asset_type}")
                 return None
