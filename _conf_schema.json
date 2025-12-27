@@ -8,11 +8,5 @@
     "description": "API 请求超时时间（秒）",
     "type": "int",
     "default": 10
-  },
-  "encryption_key": {
-    "description": "用户 API 密钥加密密钥（必须设置，建议使用随机字符串）",
-    "type": "string",
-    "default": "change-this-to-a-secure-random-string",
-    "obvious_hint": true
   }
 }
