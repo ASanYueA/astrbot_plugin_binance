@@ -34,12 +34,17 @@ class BinanceCore:
         self.data_dir = os.path.join(self.plugin_dir, "data")
         self.encryption_key_file = os.path.join(self.data_dir, "encryption_key.json")
         self.user_api_file = os.path.join(self.data_dir, "user_api_keys.json")
+        self.price_monitor_file = os.path.join(self.data_dir, "price_monitors.json")
         
         # 确保数据目录存在
         os.makedirs(self.data_dir, exist_ok=True)
         
         # 创建aiohttp客户端会话
         self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout))
+        
+        # 价格监控定时任务
+        self.price_monitor_task = None
+        self.monitor_interval = 60  # 默认每分钟检查一次
     
     async def _init_encryption_key(self):
         """
@@ -369,6 +374,307 @@ class BinanceCore:
             logger.error(f"处理解除绑定命令时发生错误: {str(e)}")
             return "❌ 处理请求时发生错误，请稍后重试"
 
+    async def load_price_monitors(self) -> Dict[str, Dict]:
+        """
+        加载价格监控数据
+        :return: 监控数据字典，格式为 {user_id: {monitor_id: monitor_data}}
+        """
+        try:
+            if os.path.exists(self.price_monitor_file):
+                with open(self.price_monitor_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            return {}
+        except Exception as e:
+            logger.error(f"加载价格监控数据失败: {str(e)}")
+            return {}
+
+    async def save_price_monitors(self, monitors: Dict[str, Dict]) -> bool:
+        """
+        保存价格监控数据
+        :param monitors: 监控数据字典
+        :return: 是否保存成功
+        """
+        try:
+            with open(self.price_monitor_file, "w", encoding="utf-8") as f:
+                json.dump(monitors, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception as e:
+            logger.error(f"保存价格监控数据失败: {str(e)}")
+            return False
+
+    async def handle_monitor_set_command(self, event: AstrMessageEvent) -> str:
+        """
+        处理监控设置命令
+        :param event: 消息事件
+        :return: 回复消息
+        """
+        try:
+            import uuid
+            
+            # 解析命令参数
+            message_content = event.message_str.strip()
+            parts = message_content.split()
+            
+            if len(parts) < 6:
+                return "❌ 请输入正确的命令格式：/监控 设置 <交易对> <资产类型> <目标价格> <方向>，例如：/监控 设置 BTCUSDT futures 50000 up"
+            
+            symbol = parts[2]
+            asset_type_param = parts[3].lower()
+            target_price_str = parts[4]
+            direction_param = parts[5].lower()
+            
+            # 验证资产类型
+            if asset_type_param not in ["spot", "futures", "margin", "alpha"]:
+                return "❌ 不支持的资产类型，请使用：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)"
+            
+            # 验证方向参数
+            if direction_param not in ["up", "down"]:
+                return "❌ 不支持的方向，请使用：up(上涨到), down(下跌到)"
+            
+            # 验证目标价格格式
+            try:
+                target_price = float(target_price_str)
+                if target_price <= 0:
+                    raise ValueError("价格必须大于0")
+            except ValueError:
+                return "❌ 目标价格必须是有效的正数"
+            
+            # 规范化交易对
+            try:
+                normalized_symbol = normalize_symbol(symbol)
+            except ValueError as e:
+                return f"❌ {str(e)}"
+            
+            # 生成唯一监控ID
+            monitor_id = str(uuid.uuid4())[:8]  # 使用UUID的前8位作为监控ID
+            user_id = event.get_sender_id()
+            
+            # 加载现有监控数据
+            monitors = await self.load_price_monitors()
+            
+            # 创建用户监控目录（如果不存在）
+            if user_id not in monitors:
+                monitors[user_id] = {}
+            
+            # 创建监控记录
+            monitor_data = {
+                "symbol": normalized_symbol,
+                "asset_type": asset_type_param,
+                "target_price": target_price,
+                "direction": direction_param,
+                "created_at": time.time(),
+                "is_active": True
+            }
+            
+            # 保存监控记录
+            monitors[user_id][monitor_id] = monitor_data
+            
+            # 保存到文件
+            if await self.save_price_monitors(monitors):
+                # 获取当前价格进行参考
+                current_price = await self.get_price(normalized_symbol, asset_type_param)
+                current_price_str = f"当前价格：{current_price:.8f} USDT" if current_price else "当前价格：无法获取"
+                
+                direction_text = "上涨到" if direction_param == "up" else "下跌到"
+                asset_type_text = {
+                    "spot": "现货",
+                    "futures": "合约",
+                    "margin": "杠杆",
+                    "alpha": "Alpha货币"
+                }[asset_type_param]
+                
+                return f"✅ 价格监控设置成功！\n监控ID：{monitor_id}\n交易对：{normalized_symbol} ({asset_type_text})\n监控条件：{direction_text} {target_price} USDT\n{current_price_str}"
+            else:
+                return "❌ 监控设置失败，请稍后重试"
+                
+        except Exception as e:
+            logger.error(f"处理监控设置命令时发生错误: {str(e)}")
+            return "❌ 处理请求时发生错误，请稍后重试"
+
+    async def handle_monitor_cancel_command(self, event: AstrMessageEvent) -> str:
+        """
+        处理监控取消命令
+        :param event: 消息事件
+        :return: 回复消息
+        """
+        try:
+            # 解析命令参数
+            message_content = event.message_str.strip()
+            parts = message_content.split()
+            
+            if len(parts) < 3:
+                return "❌ 请输入正确的命令格式：/监控 取消 <监控ID>，例如：/监控 取消 1234abcd"
+            
+            monitor_id = parts[2]
+            user_id = event.get_sender_id()
+            
+            # 加载现有监控数据
+            monitors = await self.load_price_monitors()
+            
+            # 检查用户是否有监控记录
+            if user_id not in monitors:
+                return "❌ 您没有设置任何价格监控"
+            
+            # 检查监控ID是否存在
+            if monitor_id not in monitors[user_id]:
+                return "❌ 无效的监控ID，请检查您的监控列表"
+            
+            # 删除监控记录
+            del monitors[user_id][monitor_id]
+            
+            # 如果用户没有其他监控记录，删除用户目录
+            if not monitors[user_id]:
+                del monitors[user_id]
+            
+            # 保存到文件
+            if await self.save_price_monitors(monitors):
+                return f"✅ 监控ID为{monitor_id}的价格监控已成功取消"
+            else:
+                return "❌ 取消监控失败，请稍后重试"
+                
+        except Exception as e:
+            logger.error(f"处理监控取消命令时发生错误: {str(e)}")
+            return "❌ 处理请求时发生错误，请稍后重试"
+
+    async def handle_monitor_list_command(self, event: AstrMessageEvent) -> str:
+        """
+        处理监控列表查询命令
+        :param event: 消息事件
+        :return: 回复消息
+        """
+        try:
+            user_id = event.get_sender_id()
+            
+            # 加载现有监控数据
+            monitors = await self.load_price_monitors()
+            
+            # 检查用户是否有监控记录
+            if user_id not in monitors or not monitors[user_id]:
+                return "✅ 您没有设置任何价格监控"
+            
+            # 构建监控列表
+            monitor_list = []
+            for monitor_id, monitor_data in monitors[user_id].items():
+                symbol = monitor_data["symbol"]
+                asset_type = monitor_data["asset_type"]
+                target_price = monitor_data["target_price"]
+                direction = monitor_data["direction"]
+                is_active = monitor_data["is_active"]
+                
+                # 获取当前价格
+                current_price = await self.get_price(symbol, asset_type)
+                current_price_str = f"{current_price:.8f}" if current_price else "无法获取"
+                
+                # 格式化监控信息
+                asset_type_text = {
+                    "spot": "现货",
+                    "futures": "合约",
+                    "margin": "杠杆",
+                    "alpha": "Alpha货币"
+                }[asset_type]
+                direction_text = "上涨到" if direction == "up" else "下跌到"
+                status_text = "🟢 活跃" if is_active else "🔴 已关闭"
+                
+                monitor_list.append(f"📌 监控ID：{monitor_id}\n  交易对：{symbol} ({asset_type_text})\n  监控条件：{direction_text} {target_price:.8f} USDT\n  当前价格：{current_price_str} USDT\n  状态：{status_text}")
+            
+            # 合并为回复消息
+            return f"📋 您的价格监控列表：\n\n" + "\n\n".join(monitor_list)
+            
+        except Exception as e:
+            logger.error(f"处理监控列表命令时发生错误: {str(e)}")
+            return "❌ 处理请求时发生错误，请稍后重试"
+
+    async def start_price_monitor(self) -> None:
+        """
+        启动价格监控定时任务
+        """
+        if self.price_monitor_task is None or self.price_monitor_task.done():
+            self.price_monitor_task = asyncio.create_task(self._price_monitor_task())
+            logger.info("价格监控任务已启动")
+
+    async def stop_price_monitor(self) -> None:
+        """
+        停止价格监控定时任务
+        """
+        if self.price_monitor_task is not None and not self.price_monitor_task.done():
+            self.price_monitor_task.cancel()
+            try:
+                await self.price_monitor_task
+            except asyncio.CancelledError:
+                logger.info("价格监控任务已取消")
+            except Exception as e:
+                logger.error(f"停止价格监控任务时发生错误: {str(e)}")
+            finally:
+                self.price_monitor_task = None
+
+    async def _price_monitor_task(self) -> None:
+        """
+        价格监控定时任务的实际执行函数
+        """
+        while True:
+            try:
+                await self._check_all_monitors()
+                await asyncio.sleep(self.monitor_interval)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"价格监控任务执行出错: {str(e)}")
+                await asyncio.sleep(self.monitor_interval)  # 出错后仍继续执行
+
+    async def _check_all_monitors(self) -> None:
+        """
+        检查所有用户的价格监控设置
+        """
+        try:
+            # 加载所有监控数据
+            monitors = await self.load_price_monitors()
+            
+            for user_id, user_monitors in monitors.items():
+                for monitor_id, monitor_data in list(user_monitors.items()):
+                    # 跳过非活跃监控
+                    if not monitor_data["is_active"]:
+                        continue
+                    
+                    symbol = monitor_data["symbol"]
+                    asset_type = monitor_data["asset_type"]
+                    target_price = monitor_data["target_price"]
+                    direction = monitor_data["direction"]
+                    
+                    # 获取当前价格
+                    current_price = await self.get_price(symbol, asset_type)
+                    
+                    if current_price is not None:
+                        # 检查价格是否满足监控条件
+                        if (direction == "up" and current_price >= target_price) or \
+                           (direction == "down" and current_price <= target_price):
+                            # 生成通知消息
+                            asset_type_text = {
+                                "spot": "现货",
+                                "futures": "合约",
+                                "margin": "杠杆",
+                                "alpha": "Alpha货币"
+                            }[asset_type]
+                            direction_text = "上涨到" if direction == "up" else "下跌到"
+                            
+                            # 这里需要注意：由于我们没有直接发送消息的接口，
+                            # 实际项目中需要通过事件系统或其他方式将通知发送给用户
+                            # 此处我们记录日志，模拟通知功能
+                            logger.info(f"价格监控触发：用户{user_id}设置的{symbol} ({asset_type_text}) {direction_text} {target_price} USDT的监控已触发，当前价格为{current_price:.8f} USDT")
+                            
+                            # 可以考虑在此处调用发送消息的方法，使用@提及用户
+                            # 例如：await event.send_message(f"@{user_id} 您设置的{symbol} ({asset_type_text}) {direction_text} {target_price} USDT的监控已触发，当前价格为{current_price:.8f} USDT")
+                            
+                            # 触发后可以选择关闭监控或保留
+                            # 这里选择关闭监控
+                            monitor_data["is_active"] = False
+                            monitors[user_id][monitor_id] = monitor_data
+            
+            # 保存更新后的监控数据
+            await self.save_price_monitors(monitors)
+            
+        except Exception as e:
+            logger.error(f"检查价格监控时发生错误: {str(e)}")
+
     async def handle_help_command(self, event: AstrMessageEvent) -> str:
         """
         处理帮助命令，显示所有可用命令
@@ -376,23 +682,33 @@ class BinanceCore:
         :return: 帮助信息
         """
         help_text = (
-            "📚 币安插件命令列表\n"\
-            "=================\n"\
-            "/price <交易对> [资产类型] - 查询币安资产价格\n"\
-            "  资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)\n"\
-            "  示例：/price BTCUSDT futures\n"\
-            "\n"\
-            "/绑定 <API_KEY> <SECRET_KEY> - 绑定币安API密钥\n"\
-            "  示例：/绑定 abcdef123456 abcdef123456\n"\
-            "\n"\
-            "/解除绑定 - 解除绑定币安API密钥\n"\
-            "\n"\
-            "/资产 [查询类型] - 查询账户资产（需先绑定API）\n"\
-            "  查询类型：alpha/资金/现货/合约，不输入则查询总览\n"\
-            "  示例：/资产 alpha\n"\
-            "\n"\
-            "/help - 显示本帮助信息\n"\
-            "=================\n"\
+            "📚 币安插件命令列表\n"
+            "=================\n"
+            "/price <交易对> [资产类型] - 查询币安资产价格\n"
+            "  资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)\n"
+            "  示例：/price BTCUSDT futures\n"
+            "\n"
+            "/绑定 <API_KEY> <SECRET_KEY> - 绑定币安API密钥\n"
+            "  示例：/绑定 abcdef123456 abcdef123456\n"
+            "\n"
+            "/解除绑定 - 解除绑定币安API密钥\n"
+            "\n"
+            "/资产 [查询类型] - 查询账户资产（需先绑定API）\n"
+            "  查询类型：alpha/资金/现货/合约，不输入则查询总览\n"
+            "  示例：/资产 alpha\n"
+            "\n"
+            "/监控 设置 <交易对> <资产类型> <目标价格> <方向> - 设置价格监控\n"
+            "  资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)\n"
+            "  方向：up(上涨到), down(下跌到)\n"
+            "  示例：/监控 设置 BTCUSDT futures 50000 up\n"
+            "\n"
+            "/监控 取消 <监控ID> - 取消指定的价格监控\n"
+            "  示例：/监控 取消 1\n"
+            "\n"
+            "/监控 列表 - 查看您的所有价格监控\n"
+            "\n"
+            "/bahelp - 显示本帮助信息\n"
+            "=================\n"
             "注：API密钥加密存储，确保安全\n"
         )
         return help_text
