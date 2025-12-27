@@ -135,6 +135,14 @@ class BinanceCore:
                     response_text = await response.text()
                     logger.error(f"获取{asset_type}价格失败，状态码: {response.status}，响应内容: {response_text}")
                     
+                    # 尝试解析错误响应
+                    try:
+                        error_data = await response.json()
+                        if "code" in error_data and "msg" in error_data:
+                            logger.error(f"API错误代码: {error_data['code']}, 错误信息: {error_data['msg']}")
+                    except Exception:
+                        pass
+                    
                     # 如果是Alpha类型查询失败，尝试使用现货价格作为后备
                     if asset_type == "alpha":
                         logger.info(f"Alpha价格查询失败，尝试使用现货价格作为后备")
@@ -265,7 +273,8 @@ class BinanceCore:
                 }
                 return f"✅ {normalized_symbol} ({asset_type_names[asset_type]}) 当前价格：{price:.8f} USDT"
             else:
-                return "❌ 价格查询失败，请检查交易对是否正确"
+                # 提供更详细的错误提示
+                return f"❌ 价格查询失败，请检查：\n1. 交易对是否正确（如 BTCUSDT、ETHUSDT）\n2. 该交易对是否支持{('该资产类型' if asset_type != 'spot' else '')}查询\n3. 网络连接是否正常"
                 
         except ValueError as e:
             return f"❌ {str(e)}"
