@@ -12,5 +12,5 @@ def normalize_symbol(symbol: str) -> str:
     normalized = symbol.replace("-", "").replace("_", "").strip().upper()
     # 简单校验（至少包含2个币种标识）
     if len(normalized) < 4:
-        raise ValueError(f"无效交易对：{symbol}")
+        raise ValueError(f"无效交易对：{symbol}，请确保格式正确，例如：BTCUSDT 或 BTC-USDT")
     return normalized
