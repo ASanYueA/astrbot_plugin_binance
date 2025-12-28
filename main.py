@@ -22,38 +22,39 @@ class BinancePlugin(Star):
         asyncio.create_task(self.binance_core.start_price_monitor())
 
     @filter.command("price")
-    async def handle_price(self, event: AstrMessageEvent):
-        """查询币安资产价格，使用方法：/price <交易对> [资产类型]，例如：/price BTCUSDT futures\n资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)"""
+    async def handle_price(self, event: AstrMessageEvent, *args, **kwargs):
+        """查询币安资产价格，使用方法：/price <交易对> [资产类型]，例如：/price BTCUSDT futures
+资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)"""
         result = await self.binance_core.handle_price_command(event)
         yield event.plain_result(result)
 
     @filter.command("绑定")
-    async def handle_bind(self, event: AstrMessageEvent):
+    async def handle_bind(self, event: AstrMessageEvent, *args, **kwargs):
         """绑定币安API密钥，使用方法：/绑定 <API_KEY> <SECRET_KEY>"""
         result = await self.binance_core.handle_bind_command(event)
         yield event.plain_result(result)
 
     @filter.command("资产")
-    async def handle_asset(self, event: AstrMessageEvent):
+    async def handle_asset(self, event: AstrMessageEvent, *args, **kwargs):
         """查询币安账户资产，使用方法：/资产 [查询类型]
 查询类型：alpha/资金/现货/合约，不输入则查询总览"""
         result = await self.binance_core.handle_asset_command(event)
         yield event.plain_result(result)
 
     @filter.command("解除绑定")
-    async def handle_unbind(self, event: AstrMessageEvent):
+    async def handle_unbind(self, event: AstrMessageEvent, *args, **kwargs):
         """解除绑定币安API密钥，使用方法：/解除绑定"""
         result = await self.binance_core.handle_unbind_command(event)
         yield event.plain_result(result)
 
     @filter.command("bahelp")
-    async def handle_help(self, event: AstrMessageEvent):
+    async def handle_help(self, event: AstrMessageEvent, *args, **kwargs):
         """显示币安插件的帮助信息，使用方法：/bahelp"""
         result = await self.binance_core.handle_help_command(event)
         yield event.plain_result(result)
 
     @filter.command("kline")
-    async def handle_kline(self, event: AstrMessageEvent):
+    async def handle_kline(self, event: AstrMessageEvent, *args, **kwargs):
         """查询K线数据，使用方法：/kline <交易对> [资产类型] [时间间隔]
 资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)
 时间间隔：1m, 5m, 15m, 30m, 1h, 4h, 1d
@@ -79,7 +80,7 @@ class BinancePlugin(Star):
             yield event.plain_result(f"处理请求时发生错误: {str(e)}")
 
     @filter.command("监控")
-    async def handle_monitor(self, event: AstrMessageEvent):
+    async def handle_monitor(self, event: AstrMessageEvent, *args, **kwargs):
         """价格监控命令，使用方法：
 /监控 设置 <交易对> <资产类型> <目标价格> <方向> - 设置价格监控
 /监控 取消 <监控ID> - 取消指定的价格监控
