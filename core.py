@@ -52,7 +52,7 @@ class BinanceCore:
         self.api_key_service = ApiKeyService(self.plugin_dir)
         self.chart_service = ChartService(self.plugin_dir)
     
-    async def close(self):
+    async def close(self, *args, **kwargs):
         """关闭aiohttp会话"""
         if self.session:
             await self.session.close()
