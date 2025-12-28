@@ -20,6 +20,7 @@ from .utils.crypto import encrypt_data, decrypt_data
 from .services.monitor_service import MonitorService
 from .services.price_service import PriceService
 from .services.api_key_service import ApiKeyService
+from .services.chart_service import ChartService
 
 class BinanceCore:
     def __init__(self, context: Context):
@@ -49,6 +50,7 @@ class BinanceCore:
         
         self.monitor_service = MonitorService(self.price_service, self.plugin_dir, notification_callback=send_notification)
         self.api_key_service = ApiKeyService(self.plugin_dir)
+        self.chart_service = ChartService(self.plugin_dir)
     
     async def close(self):
         """关闭aiohttp会话"""
@@ -204,6 +206,94 @@ class BinanceCore:
             logger.error(f"处理价格命令时发生错误: {str(e)}")
             return "❌ 处理请求时发生错误，请稍后重试"
 
+    async def handle_kline_command(self, event: AstrMessageEvent) -> str:
+        """
+        处理K线图查询命令
+        :param event: 消息事件
+        :return: 回复消息（字符串或图片路径元组）
+        """
+        try:
+            # 提取命令参数
+            message_content = event.message_str.strip()
+            parts = message_content.split()
+            
+            if len(parts) < 2:
+                return "用法：/kline <交易对> [资产类型] [时间间隔]\n例如：/kline BTCUSDT spot 1h\n\n资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)\n时间间隔：1m, 5m, 15m, 30m, 1h, 4h, 1d"
+
+            symbol = parts[1]
+            
+            # 解析可选参数
+            asset_type = "spot"
+            interval = "1h"
+            
+            if len(parts) >= 3:
+                asset_type = parts[2].lower()
+                
+                # 验证资产类型
+                valid_asset_types = ["spot", "futures", "margin", "alpha"]
+                if asset_type not in valid_asset_types:
+                    return f"无效的资产类型: {asset_type}\n支持的资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)"
+            
+            if len(parts) >= 4:
+                interval = parts[3].lower()
+                
+                # 验证时间间隔
+                valid_intervals = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
+                if interval not in valid_intervals:
+                    return f"无效的时间间隔: {interval}\n支持的时间间隔：1m, 5m, 15m, 30m, 1h, 4h, 1d"
+            
+            try:
+                normalized_symbol = normalize_symbol(symbol)
+            except ValueError as e:
+                return f"❌ {str(e)}"
+            
+            # 查询K线数据
+            kline_data = await self.price_service.get_kline(normalized_symbol, asset_type, interval)
+            
+            if not kline_data:
+                return f"❌ 获取K线数据失败，请检查交易对和参数是否正确"
+            
+            # 生成K线图表
+            chart_path = self.chart_service.create_kline_chart(normalized_symbol, kline_data, interval, asset_type)
+            
+            if chart_path:
+                # 返回图片结果
+                return ("image", chart_path)
+            else:
+                # 如果生成图片失败，回退到文本结果
+                # 格式化K线数据输出（只显示最近5条）
+                recent_klines = kline_data[-5:]
+                output_lines = [f"📊 {normalized_symbol} {asset_type} {interval} K线数据（最近5条）"]
+                
+                for kline in recent_klines:
+                    # K线数据结构：[开盘时间, 开盘价, 最高价, 最低价, 收盘价, 成交量, ...]
+                    timestamp = kline[0]
+                    open_price = kline[1]
+                    high_price = kline[2]
+                    low_price = kline[3]
+                    close_price = kline[4]
+                    volume = kline[5]
+                    
+                    # 格式化时间（将毫秒时间戳转换为人类可读格式）
+                    from datetime import datetime
+                    dt = datetime.fromtimestamp(timestamp / 1000)
+                    time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    # 计算涨跌幅
+                    try:
+                        change = (float(close_price) - float(open_price)) / float(open_price) * 100
+                        change_str = f"{'+' if change > 0 else ''}{change:.2f}%"
+                    except:
+                        change_str = "N/A"
+                    
+                    output_lines.append(f"[{time_str}] O: {open_price} H: {high_price} L: {low_price} C: {close_price} ({change_str}) V: {volume}")
+                
+                return "\n".join(output_lines)
+                
+        except Exception as e:
+            logger.error(f"处理K线命令时发生错误: {str(e)}")
+            return "❌ 处理请求时发生错误，请稍后重试"
+
     async def unbind_api_key(self, user_id: str) -> bool:
         """
         解除绑定用户的币安API密钥
@@ -315,6 +405,11 @@ class BinanceCore:
             "  示例：/监控 取消 1\n"
             "\n"
             "/监控 列表 - 查看您的所有价格监控\n"
+            "\n"
+            "/kline <交易对> [资产类型] [时间间隔] - 查询K线数据\n"
+            "  资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)\n"
+            "  时间间隔：1m, 5m, 15m, 30m, 1h, 4h, 1d\n"
+            "  示例：/kline BTCUSDT spot 1h\n"
             "\n"
             "/bahelp - 显示本帮助信息\n"
             "=================\n"
