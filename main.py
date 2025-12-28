@@ -11,7 +11,7 @@ from astrbot.api import logger
 from .core import BinanceCore
 
 # 导出插件类
-@register("astrbot_plugin_binance", "Binance Plugin Developer", "币安现货价格查询与API绑定插件", "1.0.0", logo="logo.png")
+@register("astrbot_plugin_binance", "Binance Plugin Developer", "币安现货价格查询与API绑定插件", "1.0.0")
 class BinancePlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
