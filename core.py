@@ -14,9 +14,12 @@ from astrbot.api import logger
 from astrbot.api.star import Context
 from astrbot.api.event import AstrMessageEvent
 
-# 导入工具函数
+# 导入工具函数和服务
 from .utils.symbol import normalize_symbol
 from .utils.crypto import encrypt_data, decrypt_data
+from .services.monitor_service import MonitorService
+from .services.price_service import PriceService
+from .services.api_key_service import ApiKeyService
 
 class BinanceCore:
     def __init__(self, context: Context):
@@ -25,16 +28,9 @@ class BinanceCore:
         self.api_url = self.config.get("binance_api_url", "https://api.binance.com")
         self.timeout = self.config.get("request_timeout", 10)
         
-        # 加密密钥将在第一次使用时初始化
-        self.encryption_key = None
-        self.encryption_key_initialized = False
-        
         # 设置存储目录
         self.plugin_dir = os.path.dirname(os.path.abspath(__file__))
         self.data_dir = os.path.join(self.plugin_dir, "data")
-        self.encryption_key_file = os.path.join(self.data_dir, "encryption_key.json")
-        self.user_api_file = os.path.join(self.data_dir, "user_api_keys.json")
-        self.price_monitor_file = os.path.join(self.data_dir, "price_monitors.json")
         
         # 确保数据目录存在
         os.makedirs(self.data_dir, exist_ok=True)
@@ -42,45 +38,18 @@ class BinanceCore:
         # 创建aiohttp客户端会话
         self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout))
         
-        # 价格监控定时任务
-        self.price_monitor_task = None
-        self.monitor_interval = 60  # 默认每分钟检查一次
+        # 初始化服务
+        self.price_service = PriceService(self.session, self.config)
+        
+        # 定义通知回调函数
+        async def send_notification(message):
+            # 由于在定时任务中没有event实例，这里只记录日志
+            # 实际项目中需要通过框架提供的接口发送消息
+            logger.info(f"准备发送通知：{message}")
+        
+        self.monitor_service = MonitorService(self.price_service, self.plugin_dir, notification_callback=send_notification)
+        self.api_key_service = ApiKeyService(self.plugin_dir)
     
-    async def _init_encryption_key(self):
-        """
-        初始化加密密钥：
-        1. 优先从文件系统中获取
-        2. 如果没有，生成一个新的随机密钥并存储到文件
-        """
-        if self.encryption_key_initialized:
-            return
-        
-        # 从文件系统中获取加密密钥
-        try:
-            if os.path.exists(self.encryption_key_file):
-                with open(self.encryption_key_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    self.encryption_key = data.get("encryption_key")
-        except Exception as e:
-            logger.error(f"从文件系统获取加密密钥失败: {str(e)}")
-        
-        # 如果没有获取到密钥，生成一个新的随机密钥
-        if not self.encryption_key or len(self.encryption_key) < 16:
-            import secrets
-            try:
-                # 生成32位的随机字符串作为加密密钥
-                self.encryption_key = secrets.token_hex(16)  # 32个字符的十六进制字符串
-                # 存储加密密钥到文件
-                with open(self.encryption_key_file, "w", encoding="utf-8") as f:
-                    json.dump({"encryption_key": self.encryption_key}, f, ensure_ascii=False, indent=2)
-                logger.info("已生成并存储新的加密密钥")
-            except Exception as e:
-                logger.error(f"生成或存储加密密钥失败: {str(e)}")
-                # 如果生成密钥失败，使用一个默认的不安全密钥（仅作为最后的 fallback）
-                self.encryption_key = "default_fallback_key_12345678"
-        
-        self.encryption_key_initialized = True
-
     async def close(self):
         """关闭aiohttp会话"""
         if self.session:
@@ -177,32 +146,7 @@ class BinanceCore:
         :param secret_key: 币安Secret密钥
         :return: 是否绑定成功
         """
-        try:
-            # 确保加密密钥已初始化
-            await self._init_encryption_key()
-            
-            # 加密API密钥
-            encrypted_api_key = encrypt_data(api_key, self.encryption_key)
-            encrypted_secret_key = encrypt_data(secret_key, self.encryption_key)
-            
-            # 存储加密后的API密钥到文件
-            user_api_data = {}
-            if os.path.exists(self.user_api_file):
-                with open(self.user_api_file, "r", encoding="utf-8") as f:
-                    user_api_data = json.load(f)
-            
-            user_api_data[user_id] = {
-                "api_key": encrypted_api_key,
-                "secret_key": encrypted_secret_key
-            }
-            
-            with open(self.user_api_file, "w", encoding="utf-8") as f:
-                json.dump(user_api_data, f, ensure_ascii=False, indent=2)
-                
-            return True
-        except Exception as e:
-            logger.error(f"绑定API密钥失败: {str(e)}")
-            return False
+        return await self.api_key_service.bind_api_key(user_id, api_key, secret_key)
 
     async def get_user_api_key(self, user_id: str) -> Optional[Tuple[str, str]]:
         """
@@ -210,34 +154,7 @@ class BinanceCore:
         :param user_id: QQ用户ID
         :return: (api_key, secret_key)元组，或None表示未绑定
         """
-        try:
-            # 确保加密密钥已初始化
-            await self._init_encryption_key()
-            
-            # 从文件中获取加密的API密钥
-            user_api_data = {}
-            if os.path.exists(self.user_api_file):
-                with open(self.user_api_file, "r", encoding="utf-8") as f:
-                    user_api_data = json.load(f)
-            
-            # 检查用户是否存在API密钥
-            if user_id not in user_api_data:
-                return None
-            
-            encrypted_api_key = user_api_data[user_id].get("api_key")
-            encrypted_secret_key = user_api_data[user_id].get("secret_key")
-            
-            if not encrypted_api_key or not encrypted_secret_key:
-                return None
-            
-            # 解密API密钥
-            api_key = decrypt_data(encrypted_api_key, self.encryption_key)
-            secret_key = decrypt_data(encrypted_secret_key, self.encryption_key)
-            
-            return (api_key, secret_key)
-        except Exception as e:
-            logger.error(f"获取用户API密钥失败: {str(e)}")
-            return None
+        return await self.api_key_service.get_api_key(user_id)
 
     async def handle_price_command(self, event: AstrMessageEvent) -> str:
         """
@@ -293,26 +210,7 @@ class BinanceCore:
         :param user_id: QQ用户ID
         :return: 是否解除绑定成功
         """
-        try:
-            # 从文件中删除用户的API密钥
-            if os.path.exists(self.user_api_file):
-                with open(self.user_api_file, "r", encoding="utf-8") as f:
-                    user_api_data = json.load(f)
-                
-                # 如果用户存在，删除其API密钥
-                if user_id in user_api_data:
-                    del user_api_data[user_id]
-                    
-                    # 将更新后的数据写回文件
-                    with open(self.user_api_file, "w", encoding="utf-8") as f:
-                        json.dump(user_api_data, f, ensure_ascii=False, indent=2)
-                    
-                    return True
-            
-            return False
-        except Exception as e:
-            logger.error(f"解除绑定API密钥失败: {str(e)}")
-            return False
+        return await self.api_key_service.unbind_api_key(user_id)
 
     async def handle_bind_command(self, event: AstrMessageEvent) -> str:
         """
@@ -374,306 +272,17 @@ class BinanceCore:
             logger.error(f"处理解除绑定命令时发生错误: {str(e)}")
             return "❌ 处理请求时发生错误，请稍后重试"
 
-    async def load_price_monitors(self) -> Dict[str, Dict]:
-        """
-        加载价格监控数据
-        :return: 监控数据字典，格式为 {user_id: {monitor_id: monitor_data}}
-        """
-        try:
-            if os.path.exists(self.price_monitor_file):
-                with open(self.price_monitor_file, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            return {}
-        except Exception as e:
-            logger.error(f"加载价格监控数据失败: {str(e)}")
-            return {}
-
-    async def save_price_monitors(self, monitors: Dict[str, Dict]) -> bool:
-        """
-        保存价格监控数据
-        :param monitors: 监控数据字典
-        :return: 是否保存成功
-        """
-        try:
-            with open(self.price_monitor_file, "w", encoding="utf-8") as f:
-                json.dump(monitors, f, ensure_ascii=False, indent=2)
-            return True
-        except Exception as e:
-            logger.error(f"保存价格监控数据失败: {str(e)}")
-            return False
-
-    async def handle_monitor_set_command(self, event: AstrMessageEvent) -> str:
-        """
-        处理监控设置命令
-        :param event: 消息事件
-        :return: 回复消息
-        """
-        try:
-            import uuid
-            
-            # 解析命令参数
-            message_content = event.message_str.strip()
-            parts = message_content.split()
-            
-            if len(parts) < 6:
-                return "❌ 请输入正确的命令格式：/监控 设置 <交易对> <资产类型> <目标价格> <方向>，例如：/监控 设置 BTCUSDT futures 50000 up"
-            
-            symbol = parts[2]
-            asset_type_param = parts[3].lower()
-            target_price_str = parts[4]
-            direction_param = parts[5].lower()
-            
-            # 验证资产类型
-            if asset_type_param not in ["spot", "futures", "margin", "alpha"]:
-                return "❌ 不支持的资产类型，请使用：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)"
-            
-            # 验证方向参数
-            if direction_param not in ["up", "down"]:
-                return "❌ 不支持的方向，请使用：up(上涨到), down(下跌到)"
-            
-            # 验证目标价格格式
-            try:
-                target_price = float(target_price_str)
-                if target_price <= 0:
-                    raise ValueError("价格必须大于0")
-            except ValueError:
-                return "❌ 目标价格必须是有效的正数"
-            
-            # 规范化交易对
-            try:
-                normalized_symbol = normalize_symbol(symbol)
-            except ValueError as e:
-                return f"❌ {str(e)}"
-            
-            # 生成唯一监控ID
-            monitor_id = str(uuid.uuid4())[:8]  # 使用UUID的前8位作为监控ID
-            user_id = event.get_sender_id()
-            
-            # 加载现有监控数据
-            monitors = await self.load_price_monitors()
-            
-            # 创建用户监控目录（如果不存在）
-            if user_id not in monitors:
-                monitors[user_id] = {}
-            
-            # 创建监控记录
-            monitor_data = {
-                "symbol": normalized_symbol,
-                "asset_type": asset_type_param,
-                "target_price": target_price,
-                "direction": direction_param,
-                "created_at": time.time(),
-                "is_active": True
-            }
-            
-            # 保存监控记录
-            monitors[user_id][monitor_id] = monitor_data
-            
-            # 保存到文件
-            if await self.save_price_monitors(monitors):
-                # 获取当前价格进行参考
-                current_price = await self.get_price(normalized_symbol, asset_type_param)
-                current_price_str = f"当前价格：{current_price:.8f} USDT" if current_price else "当前价格：无法获取"
-                
-                direction_text = "上涨到" if direction_param == "up" else "下跌到"
-                asset_type_text = {
-                    "spot": "现货",
-                    "futures": "合约",
-                    "margin": "杠杆",
-                    "alpha": "Alpha货币"
-                }[asset_type_param]
-                
-                return f"✅ 价格监控设置成功！\n监控ID：{monitor_id}\n交易对：{normalized_symbol} ({asset_type_text})\n监控条件：{direction_text} {target_price} USDT\n{current_price_str}"
-            else:
-                return "❌ 监控设置失败，请稍后重试"
-                
-        except Exception as e:
-            logger.error(f"处理监控设置命令时发生错误: {str(e)}")
-            return "❌ 处理请求时发生错误，请稍后重试"
-
-    async def handle_monitor_cancel_command(self, event: AstrMessageEvent) -> str:
-        """
-        处理监控取消命令
-        :param event: 消息事件
-        :return: 回复消息
-        """
-        try:
-            # 解析命令参数
-            message_content = event.message_str.strip()
-            parts = message_content.split()
-            
-            if len(parts) < 3:
-                return "❌ 请输入正确的命令格式：/监控 取消 <监控ID>，例如：/监控 取消 1234abcd"
-            
-            monitor_id = parts[2]
-            user_id = event.get_sender_id()
-            
-            # 加载现有监控数据
-            monitors = await self.load_price_monitors()
-            
-            # 检查用户是否有监控记录
-            if user_id not in monitors:
-                return "❌ 您没有设置任何价格监控"
-            
-            # 检查监控ID是否存在
-            if monitor_id not in monitors[user_id]:
-                return "❌ 无效的监控ID，请检查您的监控列表"
-            
-            # 删除监控记录
-            del monitors[user_id][monitor_id]
-            
-            # 如果用户没有其他监控记录，删除用户目录
-            if not monitors[user_id]:
-                del monitors[user_id]
-            
-            # 保存到文件
-            if await self.save_price_monitors(monitors):
-                return f"✅ 监控ID为{monitor_id}的价格监控已成功取消"
-            else:
-                return "❌ 取消监控失败，请稍后重试"
-                
-        except Exception as e:
-            logger.error(f"处理监控取消命令时发生错误: {str(e)}")
-            return "❌ 处理请求时发生错误，请稍后重试"
-
-    async def handle_monitor_list_command(self, event: AstrMessageEvent) -> str:
-        """
-        处理监控列表查询命令
-        :param event: 消息事件
-        :return: 回复消息
-        """
-        try:
-            user_id = event.get_sender_id()
-            
-            # 加载现有监控数据
-            monitors = await self.load_price_monitors()
-            
-            # 检查用户是否有监控记录
-            if user_id not in monitors or not monitors[user_id]:
-                return "✅ 您没有设置任何价格监控"
-            
-            # 构建监控列表
-            monitor_list = []
-            for monitor_id, monitor_data in monitors[user_id].items():
-                symbol = monitor_data["symbol"]
-                asset_type = monitor_data["asset_type"]
-                target_price = monitor_data["target_price"]
-                direction = monitor_data["direction"]
-                is_active = monitor_data["is_active"]
-                
-                # 获取当前价格
-                current_price = await self.get_price(symbol, asset_type)
-                current_price_str = f"{current_price:.8f}" if current_price else "无法获取"
-                
-                # 格式化监控信息
-                asset_type_text = {
-                    "spot": "现货",
-                    "futures": "合约",
-                    "margin": "杠杆",
-                    "alpha": "Alpha货币"
-                }[asset_type]
-                direction_text = "上涨到" if direction == "up" else "下跌到"
-                status_text = "🟢 活跃" if is_active else "🔴 已关闭"
-                
-                monitor_list.append(f"📌 监控ID：{monitor_id}\n  交易对：{symbol} ({asset_type_text})\n  监控条件：{direction_text} {target_price:.8f} USDT\n  当前价格：{current_price_str} USDT\n  状态：{status_text}")
-            
-            # 合并为回复消息
-            return f"📋 您的价格监控列表：\n\n" + "\n\n".join(monitor_list)
-            
-        except Exception as e:
-            logger.error(f"处理监控列表命令时发生错误: {str(e)}")
-            return "❌ 处理请求时发生错误，请稍后重试"
-
     async def start_price_monitor(self) -> None:
         """
         启动价格监控定时任务
         """
-        if self.price_monitor_task is None or self.price_monitor_task.done():
-            self.price_monitor_task = asyncio.create_task(self._price_monitor_task())
-            logger.info("价格监控任务已启动")
+        await self.monitor_service.start_price_monitor()
 
     async def stop_price_monitor(self) -> None:
         """
         停止价格监控定时任务
         """
-        if self.price_monitor_task is not None and not self.price_monitor_task.done():
-            self.price_monitor_task.cancel()
-            try:
-                await self.price_monitor_task
-            except asyncio.CancelledError:
-                logger.info("价格监控任务已取消")
-            except Exception as e:
-                logger.error(f"停止价格监控任务时发生错误: {str(e)}")
-            finally:
-                self.price_monitor_task = None
-
-    async def _price_monitor_task(self) -> None:
-        """
-        价格监控定时任务的实际执行函数
-        """
-        while True:
-            try:
-                await self._check_all_monitors()
-                await asyncio.sleep(self.monitor_interval)
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"价格监控任务执行出错: {str(e)}")
-                await asyncio.sleep(self.monitor_interval)  # 出错后仍继续执行
-
-    async def _check_all_monitors(self) -> None:
-        """
-        检查所有用户的价格监控设置
-        """
-        try:
-            # 加载所有监控数据
-            monitors = await self.load_price_monitors()
-            
-            for user_id, user_monitors in monitors.items():
-                for monitor_id, monitor_data in list(user_monitors.items()):
-                    # 跳过非活跃监控
-                    if not monitor_data["is_active"]:
-                        continue
-                    
-                    symbol = monitor_data["symbol"]
-                    asset_type = monitor_data["asset_type"]
-                    target_price = monitor_data["target_price"]
-                    direction = monitor_data["direction"]
-                    
-                    # 获取当前价格
-                    current_price = await self.get_price(symbol, asset_type)
-                    
-                    if current_price is not None:
-                        # 检查价格是否满足监控条件
-                        if (direction == "up" and current_price >= target_price) or \
-                           (direction == "down" and current_price <= target_price):
-                            # 生成通知消息
-                            asset_type_text = {
-                                "spot": "现货",
-                                "futures": "合约",
-                                "margin": "杠杆",
-                                "alpha": "Alpha货币"
-                            }[asset_type]
-                            direction_text = "上涨到" if direction == "up" else "下跌到"
-                            
-                            # 这里需要注意：由于我们没有直接发送消息的接口，
-                            # 实际项目中需要通过事件系统或其他方式将通知发送给用户
-                            # 此处我们记录日志，模拟通知功能
-                            logger.info(f"价格监控触发：用户{user_id}设置的{symbol} ({asset_type_text}) {direction_text} {target_price} USDT的监控已触发，当前价格为{current_price:.8f} USDT")
-                            
-                            # 可以考虑在此处调用发送消息的方法，使用@提及用户
-                            # 例如：await event.send_message(f"@{user_id} 您设置的{symbol} ({asset_type_text}) {direction_text} {target_price} USDT的监控已触发，当前价格为{current_price:.8f} USDT")
-                            
-                            # 触发后可以选择关闭监控或保留
-                            # 这里选择关闭监控
-                            monitor_data["is_active"] = False
-                            monitors[user_id][monitor_id] = monitor_data
-            
-            # 保存更新后的监控数据
-            await self.save_price_monitors(monitors)
-            
-        except Exception as e:
-            logger.error(f"检查价格监控时发生错误: {str(e)}")
+        await self.monitor_service.stop_price_monitor()
 
     async def handle_help_command(self, event: AstrMessageEvent) -> str:
         """
@@ -875,14 +484,14 @@ class BinanceCore:
                 account_data = await self.get_account_overview(api_key, secret_key)
                 if account_data:
                     return (
-                        f"💰 币安账户资产总览\n"\
-                        f"预估总资产：{account_data['total_asset']} USDT ≈ ¥{account_data['total_asset'] * 7.0:.2f}\n"\
-                        f"今日盈亏：{account_data['today_profit']} USDT ({account_data['profit_rate']}%)\n"\
-                        f"\n"\
-                        f"币种\t\t账户\n"\
-                        f"Alpha\t\t{account_data['alpha_asset']} USDT\n"\
-                        f"资金\t\t{account_data['fund_asset']} USDT\n"\
-                        f"现货\t\t{account_data['spot_asset']} USDT\n"\
+                        f"💰 币安账户资产总览\n"
+                        f"预估总资产：{account_data['total_asset']} USDT ≈ ¥{account_data['total_asset'] * 7.0:.2f}\n"
+                        f"今日盈亏：{account_data['today_profit']} USDT ({account_data['profit_rate']}%)\n"
+                        f"\n"
+                        f"币种\t\t账户\n"
+                        f"Alpha\t\t{account_data['alpha_asset']} USDT\n"
+                        f"资金\t\t{account_data['fund_asset']} USDT\n"
+                        f"现货\t\t{account_data['spot_asset']} USDT\n"
                         f"合约\t\t{account_data['futures_asset']} USDT"
                     )
                 else:
@@ -896,8 +505,8 @@ class BinanceCore:
                     else:
                         details = "无"
                     return (
-                        f"📊 Alpha货币资产\n"\
-                        f"总资产：{alpha_data['total']} USDT\n"\
+                        f"📊 Alpha货币资产\n"
+                        f"总资产：{alpha_data['total']} USDT\n"
                         f"详细信息：\n{details}"
                     )
                 else:
@@ -911,8 +520,8 @@ class BinanceCore:
                     else:
                         details = "无"
                     return (
-                        f"💵 资金账户资产\n"\
-                        f"总资产：{fund_data['total']} USDT\n"\
+                        f"💵 资金账户资产\n"
+                        f"总资产：{fund_data['total']} USDT\n"
                         f"详细信息：\n{details}"
                     )
                 else:
@@ -926,8 +535,8 @@ class BinanceCore:
                     else:
                         details = "无"
                     return (
-                        f"📈 现货账户资产\n"\
-                        f"总资产：{spot_data['total']} USDT\n"\
+                        f"📈 现货账户资产\n"
+                        f"总资产：{spot_data['total']} USDT\n"
                         f"详细信息：\n{details}"
                     )
                 else:
@@ -941,8 +550,8 @@ class BinanceCore:
                     else:
                         details = "无"
                     return (
-                        f"🎯 合约账户资产\n"\
-                        f"总资产：{futures_data['total']} USDT\n"\
+                        f"🎯 合约账户资产\n"
+                        f"总资产：{futures_data['total']} USDT\n"
                         f"详细信息：\n{details}"
                     )
                 else:
