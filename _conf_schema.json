@@ -1,8 +1,18 @@
 {
   "binance_api_url": {
-    "description": "币安公共 API 地址",
+    "description": "币安公共API地址",
     "type": "string",
     "default": "https://api.binance.com"
+  },
+  "api_alpha_url": {
+    "description": "币安Alpha API地址",
+    "type": "string",
+    "default": "https://api.binance.com"
+  },
+  "api_futures_url": {
+    "description": "币安合约API地址",
+    "type": "string",
+    "default": "https://fapi.binance.com"
   },
   "request_timeout": {
     "description": "API 请求超时时间（秒）",
