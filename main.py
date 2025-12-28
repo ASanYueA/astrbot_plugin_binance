@@ -11,7 +11,7 @@ from astrbot.api import logger
 from .core import BinanceCore
 
 # 导出插件类
-@register("astrbot_plugin_binance", "Binance Plugin Developer", "币安现货价格查询与API绑定插件", "1.0.0")
+@register("astrbot_plugin_binance", "Binance Plugin Developer", "币安现货价格查询与API绑定插件", "1.0.0", logo="logo.png")
 class BinancePlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -61,26 +61,13 @@ class BinancePlugin(Star):
 资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)
 方向：up(上涨到), down(下跌到)
 示例：/监控 设置 BTCUSDT futures 50000 up"""
-        message_content = event.message_str.strip()
-        parts = message_content.split()
-        
-        if len(parts) < 2:
-            yield event.plain_result("❌ 请输入正确的监控命令，例如：/监控 设置 BTCUSDT futures 50000 up")
-            return
-        
-        sub_command = parts[1].lower()
-        
-        if sub_command == "设置":
-            result = await self.binance_core.handle_monitor_set_command(event)
-            yield event.plain_result(result)
-        elif sub_command == "取消":
-            result = await self.binance_core.handle_monitor_cancel_command(event)
-            yield event.plain_result(result)
-        elif sub_command == "列表":
-            result = await self.binance_core.handle_monitor_list_command(event)
-            yield event.plain_result(result)
-        else:
-            yield event.plain_result("❌ 不支持的监控子命令，请使用：设置、取消或列表")
+        # 导入监控命令处理函数
+        from .commands.monitor import cmd_monitor
+        # 传递必要的属性
+        event.plugin_dir = self.context.plugin_dir
+        # 处理监控命令
+        async for result in cmd_monitor(event, self.context.get_config()):
+            yield result
 
     async def terminate(self):
         """插件被卸载/停用时调用"""
