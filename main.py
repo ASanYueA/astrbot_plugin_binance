@@ -93,10 +93,10 @@ class BinancePlugin(Star):
         # 传递必要的属性
         event.plugin_dir = self.context.plugin_dir
         # 处理监控命令
-        async for result in cmd_monitor(event, self.context.get_config()):
+        async for result in cmd_monitor(event, self.context.get_config(), self.binance_core.price_service, self.binance_core.monitor_service):
             yield result
 
-    async def terminate(self):
+    async def terminate(self, *args, **kwargs):
         """插件被卸载/停用时调用"""
         # 关闭核心模块的资源
         if hasattr(self, 'binance_core'):
