@@ -1,17 +1,20 @@
-from ..storage.user_store import get_user
-from ..utils.crypto import decrypt
+from ..storage.user import get_user_api
+from ..utils.crypto import decrypt_data
 from ..services.private import BinancePrivateAPI
 
 
 async def cmd_asset(event, config):
-    user = get_user(str(event.user_id))
-    if not user:
+    user_id = str(event.user_id)
+    user_api = get_user_api(user_id, config["encrypt_secret"], config["user_data_file"])
+    if not user_api:
         yield event.plain_result("❌ 请先使用 /绑定 绑定 API")
         return
 
+    api_key, secret_key = user_api
+
     api = BinancePrivateAPI(
-        api_key=decrypt(user["api_key"], config["encrypt_secret"]),
-        secret_key=decrypt(user["secret_key"], config["encrypt_secret"]),
+        api_key=api_key,
+        secret_key=secret_key,
         base_url=config["binance_base_url"]
     )
 
