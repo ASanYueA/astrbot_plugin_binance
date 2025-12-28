@@ -52,6 +52,32 @@ class BinancePlugin(Star):
         result = await self.binance_core.handle_help_command(event)
         yield event.plain_result(result)
 
+    @filter.command("kline")
+    async def handle_kline(self, event: AstrMessageEvent):
+        """查询K线数据，使用方法：/kline <交易对> [资产类型] [时间间隔]
+资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)
+时间间隔：1m, 5m, 15m, 30m, 1h, 4h, 1d
+示例：/kline BTCUSDT spot 1h"""
+        try:
+            # 调用核心处理方法，获取结果
+            result = await self.binance_core.handle_kline_command(event)
+            
+            # 检查结果类型
+            if isinstance(result, tuple) and len(result) == 2 and result[0] == "image":
+                # 如果是图片结果，发送图片
+                image_path = result[1]
+                if hasattr(event, "image_result"):
+                    yield event.image_result(image_path)
+                else:
+                    # 回退到文本结果
+                    yield event.plain_result("无法发送图片，请检查框架版本支持")
+            else:
+                # 文本结果，直接发送
+                yield event.plain_result(result)
+        except Exception as e:
+            logger.error(f"处理K线命令时发生错误: {str(e)}")
+            yield event.plain_result(f"处理请求时发生错误: {str(e)}")
+
     @filter.command("监控")
     async def handle_monitor(self, event: AstrMessageEvent):
         """价格监控命令，使用方法：
