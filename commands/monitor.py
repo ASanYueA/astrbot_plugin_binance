@@ -3,7 +3,7 @@ from ..services.price_service import PriceService
 from ..utils.symbol import normalize_symbol
 
 
-async def cmd_monitor(event, config):
+async def cmd_monitor(event, config, price_service, monitor_service):
     message_content = event.message_str.strip()
     parts = message_content.split()
     
@@ -12,11 +12,6 @@ async def cmd_monitor(event, config):
         return
     
     sub_command = parts[1].lower()
-    
-    # 初始化服务
-    plugin_dir = event.plugin_dir
-    price_service = PriceService(plugin_dir)
-    monitor_service = MonitorService(price_service, plugin_dir)
     
     if sub_command == "设置":
         await handle_monitor_set(event, parts, monitor_service)
