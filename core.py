@@ -212,7 +212,7 @@ class BinanceCore:
             logger.error(f"处理价格命令时发生错误: {str(e)}")
             return "❌ 处理请求时发生错误，请稍后重试"
 
-    async def handle_kline_command(self, event: AstrMessageEvent) -> str:
+    async def handle_kline_command(self, event: AstrMessageEvent) -> str or Tuple[str, str]:
         """
         处理K线图查询命令
         :param event: 消息事件
@@ -368,13 +368,13 @@ class BinanceCore:
             logger.error(f"处理解除绑定命令时发生错误: {str(e)}")
             return "❌ 处理请求时发生错误，请稍后重试"
 
-    async def start_price_monitor(self) -> None:
+    async def start_price_monitor(self, *args, **kwargs) -> None:
         """
         启动价格监控定时任务
         """
         await self.monitor_service.start_price_monitor()
 
-    async def stop_price_monitor(self) -> None:
+    async def stop_price_monitor(self, *args, **kwargs) -> None:
         """
         停止价格监控定时任务
         """
