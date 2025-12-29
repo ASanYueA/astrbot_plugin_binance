@@ -29,13 +29,14 @@ class BinanceCore:
         self.api_url = self.config.get("binance_api_url", "https://api.binance.com")
         self.timeout = self.config.get("request_timeout", 10)
         
-        # 设置存储目录
-        self.plugin_dir = os.path.dirname(os.path.abspath(__file__))
-        # 使用插件自身目录作为数据目录
-        self.data_dir = os.path.join(self.plugin_dir, "data")
+        # 设置存储目录 - 使用官方推荐的plugin_data目录
+        from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+        self.name = "astrbot_plugin_binance"  # 插件名称
+        self.data_dir = get_astrbot_data_path() / "plugin_data" / self.name
         
         # 确保数据目录存在
-        os.makedirs(self.data_dir, exist_ok=True)
+        import pathlib
+        pathlib.Path(self.data_dir).mkdir(parents=True, exist_ok=True)
         
         # 创建aiohttp客户端会话
         self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout))
@@ -49,10 +50,10 @@ class BinanceCore:
             # 实际项目中需要通过框架提供的接口发送消息
             logger.info(f"准备发送通知：{message}")
         
-        # 初始化服务，使用插件自身目录作为数据目录
-        self.monitor_service = MonitorService(self.price_service, self.plugin_dir, notification_callback=send_notification)
-        self.api_key_service = ApiKeyService(self.plugin_dir)
-        self.chart_service = ChartService(self.plugin_dir)
+        # 初始化服务，使用官方推荐的plugin_data目录
+        self.monitor_service = MonitorService(self.price_service, str(self.data_dir), notification_callback=send_notification)
+        self.api_key_service = ApiKeyService(str(self.data_dir))
+        self.chart_service = ChartService(str(self.data_dir))
     
     async def close(self, *args, **kwargs):
         """关闭aiohttp会话"""
