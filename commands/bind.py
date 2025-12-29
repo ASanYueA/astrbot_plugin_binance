@@ -4,7 +4,7 @@
 from astrbot.api.message import MessageEvent
 from typing import AsyncGenerator
 from ..storage.user import save_user_api
-from ..utils.logger import plugin_logger
+from astrbot.api import logger as plugin_logger
 
 async def cmd_bind(
     event: MessageEvent,
@@ -31,6 +31,17 @@ async def cmd_bind(
         # 校验API密钥非空
         if not api_key or not secret_key:
             yield event.plain_result("❌ API Key和Secret Key不能为空！")
+            return
+
+        # 校验API密钥长度
+        if len(api_key) < 20 or len(secret_key) < 20:
+            yield event.plain_result("❌ API密钥或Secret密钥长度不足，请检查后重试")
+            return
+
+        # 验证API密钥字符合法性
+        import re
+        if not re.match(r'^[A-Za-z0-9-_]+$', api_key) or not re.match(r'^[A-Za-z0-9-_]+$', secret_key):
+            yield event.plain_result("❌ API密钥或Secret密钥包含非法字符，请检查后重试")
             return
 
         # 加密保存
