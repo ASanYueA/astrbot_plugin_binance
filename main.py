@@ -13,8 +13,8 @@ from .core import BinanceCore
 # 导出插件类
 @register("astrbot_plugin_binance", "Binance Plugin Developer", "币安现货价格查询与API绑定插件", "1.0.0")
 class BinancePlugin(Star):
-    def __init__(self, context: Context):
-        super().__init__(context)
+    def __init__(self, context: Context, *args, **kwargs):
+        super().__init__(context, *args, **kwargs)
         # 初始化核心模块
         self.binance_core = BinanceCore(context)
         logger.info("币安插件初始化成功")
@@ -90,9 +90,7 @@ class BinancePlugin(Star):
 示例：/监控 设置 BTCUSDT futures 50000 up"""
         # 导入监控命令处理函数
         from .commands.monitor import cmd_monitor
-        # 传递必要的属性
-        event.plugin_dir = self.context.plugin_dir
-        # 处理监控命令
+        # 处理监控命令，使用已经配置好的服务实例
         async for result in cmd_monitor(event, self.context.get_config(), self.binance_core.price_service, self.binance_core.monitor_service):
             yield result
 
