@@ -9,11 +9,9 @@ import mplfinance as mpf
 import pandas as pd
 import numpy as np
 import tempfile
-import logging
 from datetime import datetime
 from typing import Optional
-
-logger = logging.getLogger(__name__)
+from astrbot.api import logger
 
 class ChartService:
     """
