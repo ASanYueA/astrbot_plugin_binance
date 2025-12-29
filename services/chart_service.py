@@ -34,8 +34,21 @@ class ChartService:
         :return: 图表文件路径，或None表示失败
         """
         try:
-            if not kline_data or len(kline_data) == 0:
-                logger.error("K线数据为空，无法生成图表")
+            # 参数验证
+            if not symbol or not isinstance(symbol, str):
+                logger.error(f"交易对参数无效: {symbol}")
+                return None
+            
+            if not kline_data or not isinstance(kline_data, list) or len(kline_data) == 0:
+                logger.error("K线数据为空或格式无效，无法生成图表")
+                return None
+            
+            if not interval or not isinstance(interval, str):
+                logger.error(f"时间间隔参数无效: {interval}")
+                return None
+            
+            if not asset_type or not isinstance(asset_type, str):
+                logger.error(f"资产类型参数无效: {asset_type}")
                 return None
             
             # 转换K线数据为DataFrame格式
@@ -45,44 +58,91 @@ class ChartService:
                 logger.error("转换K线数据失败，无法生成图表")
                 return None
             
-            # 设置图表样式，模拟币安APP风格
+            # 设置图表样式，模拟专业交易软件风格
             mc = mpf.make_marketcolors(
-                up='red',  # 上涨K线为红色
-                down='green',  # 下跌K线为绿色
+                up='#FF3B30',  # 鲜艳的红色上涨K线
+                down='#34C759',  # 鲜艳的绿色下跌K线
                 edge='inherit',
-                wick='inherit',
-                volume='inherit'
+                wick='#8E8E93',  # 灰色的蜡烛芯
+                volume='#FF3B30',  # 上涨成交量为红色
+                ohlc='inherit'
             )
             
             s = mpf.make_mpf_style(
                 marketcolors=mc,
                 base_mpf_style='nightclouds',  # 深色背景
-                gridstyle=':',
-                rc={'font.size': 8, 'figure.facecolor': '#121212'}
+                gridstyle=':',  # 虚线网格
+                rc={
+                    'font.size': 10,
+                    'figure.facecolor': '#000000',  # 黑色背景
+                    'axes.facecolor': '#121212',  # 深灰色坐标轴背景
+                    'axes.grid': True,  # 显示网格
+                    'axes.grid.axis': 'both',  # 显示X和Y轴网格
+                    'axes.labelsize': 10,  # 坐标轴标签大小
+                    'axes.titlesize': 12,  # 标题大小
+                    'xtick.labelsize': 8,  # X轴刻度大小
+                    'ytick.labelsize': 8,  # Y轴刻度大小
+                    'text.color': '#FFFFFF',  # 文本颜色为白色
+                    'axes.labelcolor': '#FFFFFF',  # 坐标轴标签颜色
+                    'xtick.color': '#8E8E93',  # X轴刻度颜色
+                    'ytick.color': '#8E8E93',  # Y轴刻度颜色
+                    'grid.color': '#2C2C2E',  # 网格颜色
+                    'savefig.transparent': False  # 保存时不透明
+                }
             )
             
             # 创建临时文件
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             file_path = os.path.join(self.temp_dir, f"kline_{symbol}_{asset_type}_{interval}_{timestamp}.png")
             
+            # 资产类型显示名称映射
+            asset_type_names = {
+                "spot": "现货",
+                "futures": "合约",
+                "margin": "杠杆",
+                "alpha": "Alpha货币"
+            }
+            display_name = asset_type_names.get(asset_type, asset_type)
+            
             # 绘制图表
             mpf.plot(
                 df,
-                type='candle',
-                style=s,
-                volume=True,
-                title=f'{symbol} {asset_type} {interval}',
-                ylabel='价格',
-                ylabel_lower='成交量',
-                datetime_format='%Y-%m-%d %H:%M',
-                figsize=(10, 6),
-                tight_layout=True,
-                savefig=dict(fname=file_path, dpi=300, pad_inches=0.1)
+                type='candle',  # 蜡烛图类型
+                style=s,  # 使用自定义样式
+                volume=True,  # 显示成交量
+                title=f'{symbol} {display_name} {interval} K线图',  # 图表标题
+                ylabel='价格 (USDT)',  # Y轴标签
+                ylabel_lower='成交量',  # 成交量标签
+                datetime_format='%Y-%m-%d %H:%M',  # 日期时间格式
+                figsize=(12, 8),  # 图表尺寸
+                tight_layout=True,  # 紧凑布局
+                show_nontrading=False,  # 不显示非交易时间
+                scale_width_adjustment=dict(volume=0.35, candle=1.0),  # 调整蜡烛图和成交量的宽度比例
+                savefig=dict(
+                    fname=file_path,  # 保存路径
+                    dpi=300,  # 高分辨率
+                    pad_inches=0.2,  # 边距
+                    bbox_inches='tight'  # 紧凑的边界框
+                )
             )
             
-            logger.info(f"K线图表生成成功: {file_path}")
-            return file_path
+            # 验证文件是否生成成功
+            if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+                logger.info(f"K线图表生成成功: {file_path}")
+                return file_path
+            else:
+                logger.error(f"图表文件生成失败或为空: {file_path}")
+                return None
             
+        except ValueError as e:
+            logger.error(f"生成K线图表时参数错误: {str(e)}")
+            return None
+        except ImportError as e:
+            logger.error(f"生成K线图表时导入错误: {str(e)}")
+            return None
+        except MemoryError as e:
+            logger.error(f"生成K线图表时内存不足: {str(e)}")
+            return None
         except Exception as e:
             logger.error(f"生成K线图表时发生错误: {str(e)}")
             return None
