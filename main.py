@@ -25,40 +25,71 @@ class BinancePlugin(Star):
     async def handle_price(self, event: AstrMessageEvent, *args, **kwargs):
         """查询币安资产价格，使用方法：/price <交易对> [资产类型]，例如：/price BTCUSDT futures
 资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)"""
-        result = await self.binance_core.handle_price_command(event)
-        yield event.plain_result(result)
+        logger.info(f"开始处理价格命令: {event.message_str}")
+        try:
+            result = await self.binance_core.handle_price_command(event)
+            logger.info(f"价格命令处理结果: {result}")
+            yield event.plain_result(result)
+        except Exception as e:
+            logger.error(f"处理价格命令时发生错误: {str(e)}")
+            yield event.plain_result(f"处理请求时发生错误: {str(e)}")
 
     @filter.command("绑定")
     async def handle_bind(self, event: AstrMessageEvent, *args, **kwargs):
         """绑定币安API密钥，使用方法：/绑定 <API_KEY> <SECRET_KEY>"""
-        result = await self.binance_core.handle_bind_command(event)
-        yield event.plain_result(result)
+        logger.info(f"开始处理绑定命令: {event.message_str}")
+        try:
+            result = await self.binance_core.handle_bind_command(event)
+            logger.info(f"绑定命令处理结果: {result}")
+            yield event.plain_result(result)
+        except Exception as e:
+            logger.error(f"处理绑定命令时发生错误: {str(e)}")
+            yield event.plain_result(f"处理请求时发生错误: {str(e)}")
 
     @filter.command("资产")
     async def handle_asset(self, event: AstrMessageEvent, *args, **kwargs):
         """查询币安账户资产，使用方法：/资产 [查询类型]
 查询类型：alpha/资金/现货/合约，不输入则查询总览"""
-        result = await self.binance_core.handle_asset_command(event)
-        yield event.plain_result(result)
+        logger.info(f"开始处理资产命令: {event.message_str}")
+        try:
+            result = await self.binance_core.handle_asset_command(event)
+            logger.info(f"资产命令处理结果: {result}")
+            yield event.plain_result(result)
+        except Exception as e:
+            logger.error(f"处理资产命令时发生错误: {str(e)}")
+            yield event.plain_result(f"处理请求时发生错误: {str(e)}")
 
     @filter.command("解除绑定")
     async def handle_unbind(self, event: AstrMessageEvent, *args, **kwargs):
         """解除绑定币安API密钥，使用方法：/解除绑定"""
-        result = await self.binance_core.handle_unbind_command(event)
-        yield event.plain_result(result)
+        logger.info(f"开始处理解除绑定命令: {event.message_str}")
+        try:
+            result = await self.binance_core.handle_unbind_command(event)
+            logger.info(f"解除绑定命令处理结果: {result}")
+            yield event.plain_result(result)
+        except Exception as e:
+            logger.error(f"处理解除绑定命令时发生错误: {str(e)}")
+            yield event.plain_result(f"处理请求时发生错误: {str(e)}")
 
     @filter.command("bahelp")
     async def handle_help(self, event: AstrMessageEvent, *args, **kwargs):
         """显示币安插件的帮助信息，使用方法：/bahelp"""
-        result = await self.binance_core.handle_help_command(event)
-        yield event.plain_result(result)
+        logger.info(f"开始处理帮助命令: {event.message_str}")
+        try:
+            result = await self.binance_core.handle_help_command(event)
+            logger.info(f"帮助命令处理结果: {result}")
+            yield event.plain_result(result)
+        except Exception as e:
+            logger.error(f"处理帮助命令时发生错误: {str(e)}")
+            yield event.plain_result(f"处理请求时发生错误: {str(e)}")
 
     @filter.command("kline")
     async def handle_kline(self, event: AstrMessageEvent, *args, **kwargs):
         """查询K线数据，使用方法：/kline <交易对> [资产类型] [时间间隔]
-资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)
-时间间隔：1m, 5m, 15m, 30m, 1h, 4h, 1d
-示例：/kline BTCUSDT spot 1h"""
+        资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)
+        时间间隔：1m, 5m, 15m, 30m, 1h, 4h, 1d
+        示例：/kline BTCUSDT spot 1h"""
+        logger.info(f"开始处理K线命令: {event.message_str}")
         try:
             # 调用核心处理方法，获取结果
             result = await self.binance_core.handle_kline_command(event)
@@ -88,11 +119,17 @@ class BinancePlugin(Star):
 资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)
 方向：up(上涨到), down(下跌到)
 示例：/监控 设置 BTCUSDT futures 50000 up"""
-        # 导入监控命令处理函数
-        from .commands.monitor import cmd_monitor
-        # 处理监控命令，使用已经配置好的服务实例
-        async for result in cmd_monitor(event, self.context.get_config(), self.binance_core.price_service, self.binance_core.monitor_service):
-            yield result
+        logger.info(f"开始处理监控命令: {event.message_str}")
+        try:
+            # 导入监控命令处理函数
+            from .commands.monitor import cmd_monitor
+            # 处理监控命令，使用已经配置好的服务实例
+            async for result in cmd_monitor(event, self.context.get_config(), self.binance_core.price_service, self.binance_core.monitor_service):
+                logger.info(f"监控命令处理结果: {result}")
+                yield result
+        except Exception as e:
+            logger.error(f"处理监控命令时发生异常: {str(e)}")
+            yield event.plain_result(f"处理请求时发生错误: {str(e)}")
 
     async def terminate(self, *args, **kwargs):
         """插件被卸载/停用时调用"""
