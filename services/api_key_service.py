@@ -13,9 +13,8 @@ class ApiKeyService:
     """
     API密钥管理服务类，处理API密钥的加密存储、获取和删除
     """
-    def __init__(self, plugin_dir: str):
-        self.plugin_dir = plugin_dir
-        self.data_dir = os.path.join(self.plugin_dir, "data")
+    def __init__(self, data_dir: str):
+        self.data_dir = data_dir
         self.encryption_key_file = os.path.join(self.data_dir, "encryption_key.json")
         self.user_api_file = os.path.join(self.data_dir, "user_api_keys.json")
         
