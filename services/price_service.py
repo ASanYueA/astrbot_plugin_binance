@@ -114,8 +114,19 @@ class PriceService:
         """
         logger.info(f"开始查询K线：symbol={symbol}, asset_type={asset_type}, interval={interval}, limit={limit}")
         try:
+            # 验证交易对参数
+            if not symbol or len(symbol) < 4:
+                logger.error(f"交易对格式不正确: {symbol}")
+                return None
+            
             # 标准化交易对格式
             normalized_symbol = normalize_symbol(symbol)
+            
+            # 验证交易对字符合法性
+            import re
+            if not re.match(r'^[A-Z]+$', normalized_symbol):
+                logger.error(f"交易对只能包含字母: {normalized_symbol}")
+                return None
             
             # 验证时间间隔
             valid_intervals = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
@@ -123,8 +134,14 @@ class PriceService:
                 logger.error(f"不支持的时间间隔: {interval}")
                 return None
             
-            # 限制limit的最大值
-            limit = min(limit, 1000)
+            # 验证资产类型
+            valid_asset_types = ["spot", "futures", "margin", "alpha"]
+            if asset_type not in valid_asset_types:
+                logger.error(f"不支持的资产类型: {asset_type}")
+                return None
+            
+            # 限制limit的范围
+            limit = max(1, min(limit, 1000))
             
             # 根据资产类型选择不同的API域名和端点
             if asset_type == "spot":
@@ -157,14 +174,21 @@ class PriceService:
             
             logger.debug(f"查询{asset_type}K线：URL={url}, 参数={params}")
             
-            async with self.session.get(url, params=params) as response:
+            # 设置请求超时
+            async with self.session.get(url, params=params, timeout=self.timeout) as response:
                 logger.debug(f"API响应状态码: {response.status}, 响应头: {response.headers}")
                 
                 if response.status == 200:
                     data = await response.json()
                     logger.debug(f"API响应数据: {data}")
-                    logger.info(f"成功获取K线数据: symbol={symbol}, asset_type={asset_type}, interval={interval}, 数据条数={len(data)}")
-                    return data
+                    
+                    # 验证返回数据格式
+                    if isinstance(data, list) and data:
+                        logger.info(f"成功获取K线数据: symbol={symbol}, asset_type={asset_type}, interval={interval}, 数据条数={len(data)}")
+                        return data
+                    else:
+                        logger.error(f"API返回数据格式不正确: {data}")
+                        return None
                 else:
                     response_text = await response.text()
                     logger.error(f"获取{asset_type}K线失败，状态码: {response.status}，响应内容: {response_text}")
@@ -179,6 +203,15 @@ class PriceService:
                     
                     logger.info(f"K线查询失败，返回None: symbol={symbol}, asset_type={asset_type}, interval={interval}")
                     return None
+        except aiohttp.ClientTimeout:
+            logger.error(f"获取{asset_type}K线超时: symbol={symbol}, interval={interval}")
+            return None
+        except aiohttp.ClientError as e:
+            logger.error(f"获取{asset_type}K线网络错误: {str(e)}", exc_info=True)
+            return None
+        except ValueError as e:
+            logger.error(f"获取{asset_type}K线数据解析错误: {str(e)}", exc_info=True)
+            return None
         except Exception as e:
             logger.error(f"获取{asset_type}K线时发生错误: {str(e)}", exc_info=True)
             return None
