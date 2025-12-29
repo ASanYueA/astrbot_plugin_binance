@@ -16,10 +16,9 @@ class MonitorService:
     """
     价格监控服务类，处理价格监控的设置、取消、检查等功能
     """
-    def __init__(self, price_service: PriceService, plugin_dir: str, notification_callback=None):
+    def __init__(self, price_service: PriceService, data_dir: str, notification_callback=None):
         self.price_service = price_service
-        self.plugin_dir = plugin_dir
-        self.data_dir = os.path.join(self.plugin_dir, "data")
+        self.data_dir = data_dir
         self.price_monitor_file = os.path.join(self.data_dir, "price_monitors.json")
         
         # 确保数据目录存在
