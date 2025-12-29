@@ -47,16 +47,49 @@ class BinanceCore:
         # 初始化服务
         self.price_service = PriceService(self.session, self.config)
         
-        # 定义通知回调函数
-        async def send_notification(message):
-            # 由于在定时任务中没有event实例，这里只记录日志
-            # 实际项目中需要通过框架提供的接口发送消息
-            logger.info(f"准备发送通知：{message}")
-        
         # 初始化服务，使用官方推荐的plugin_data目录
-        self.monitor_service = MonitorService(self.price_service, str(self.data_dir), notification_callback=send_notification)
+        # 通知回调函数将在MonitorService中使用
+        self.monitor_service = MonitorService(self.price_service, str(self.data_dir), notification_callback=self._send_notification)
         self.api_key_service = ApiKeyService(str(self.data_dir))
         self.chart_service = ChartService(str(self.data_dir))
+
+    async def _send_notification(self, message: str) -> None:
+        """
+        发送通知消息的回调函数
+        
+        :param message: 要发送的通知消息
+        """
+        try:
+            # 在实际项目中，这里应该通过框架提供的API发送消息
+            # 由于当前在定时任务中没有event实例，我们记录日志并将通知存储到文件
+            logger.info(f"发送通知：{message}")
+            
+            # 保存通知到文件，以便后续查询或处理
+            notifications_file = os.path.join(str(self.data_dir), "notifications.json")
+            notifications = []
+            
+            # 加载现有通知
+            if os.path.exists(notifications_file):
+                with open(notifications_file, "r", encoding="utf-8") as f:
+                    notifications = json.load(f)
+            
+            # 添加新通知
+            notification_entry = {
+                "timestamp": time.time(),
+                "message": message
+            }
+            notifications.append(notification_entry)
+            
+            # 只保留最近100条通知
+            if len(notifications) > 100:
+                notifications = notifications[-100:]
+            
+            # 保存通知
+            with open(notifications_file, "w", encoding="utf-8") as f:
+                json.dump(notifications, f, ensure_ascii=False, indent=2)
+                
+        except Exception as e:
+            logger.error(f"发送通知时发生错误: {str(e)}")
     
     async def close(self, *args, **kwargs):
         """关闭aiohttp会话"""
@@ -178,13 +211,23 @@ class BinanceCore:
             if len(parts) < 2:
                 return "❌ 请输入正确的命令格式：/price <交易对> [资产类型]，例如：/price BTCUSDT futures"
             
-            symbol = parts[1]
+            symbol = parts[1].strip().upper()  # 标准化为大写
+            
+            # 增强交易对验证
+            if not symbol or len(symbol) < 4:
+                return "❌ 交易对格式不正确，请检查后重试（如 BTCUSDT、ETHUSDT）"
+            
+            # 验证交易对字符合法性（通常只包含字母）
+            import re
+            if not re.match(r'^[A-Z]+$', symbol):
+                return "❌ 交易对只能包含字母，请检查后重试"
             
             # 解析资产类型参数（可选）
             asset_type = "spot"  # 默认现货
+            valid_asset_types = ["spot", "futures", "margin", "alpha"]
             if len(parts) >= 3:
                 asset_type_param = parts[2].lower()
-                if asset_type_param in ["spot", "futures", "margin", "alpha"]:
+                if asset_type_param in valid_asset_types:
                     asset_type = asset_type_param
                 else:
                     return f"❌ 不支持的资产类型：{asset_type_param}，支持的类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)"
@@ -192,7 +235,7 @@ class BinanceCore:
             # 查询价格
             price = await self.get_price(symbol, asset_type)
             
-            if price:
+            if price is not None and price > 0:
                 normalized_symbol = normalize_symbol(symbol)
                 # 资产类型显示名称映射
                 asset_type_names = {
@@ -326,9 +369,17 @@ class BinanceCore:
             secret_key = parts[2]
             user_id = event.get_sender_id()
             
-            # 验证API密钥格式（简单验证）
+            # 增强API密钥格式验证
+            if not api_key or not secret_key:
+                return "❌ API密钥和Secret密钥不能为空"
+                
             if len(api_key) < 20 or len(secret_key) < 20:
-                return "❌ API密钥格式不正确，请检查后重试"
+                return "❌ API密钥或Secret密钥长度不足，请检查后重试"
+            
+            # 验证API密钥字符合法性（通常只包含字母、数字和特殊字符）
+            import re
+            if not re.match(r'^[A-Za-z0-9-_]+$', api_key) or not re.match(r'^[A-Za-z0-9-_]+$', secret_key):
+                return "❌ API密钥或Secret密钥包含非法字符，请检查后重试"
             
             # 绑定API密钥
             success = await self.bind_api_key(user_id, api_key, secret_key)
@@ -551,6 +602,25 @@ class BinanceCore:
             "details": []
         }
 
+    async def _format_asset_details(self, asset_data: Dict, asset_name: str, emoji: str) -> str:
+        """
+        格式化资产详情信息
+        
+        :param asset_data: 资产数据字典
+        :param asset_name: 资产名称
+        :param emoji: 资产显示的 emoji
+        :return: 格式化后的资产信息字符串
+        """
+        if asset_data['details']:
+            details = "\n".join([f"{item['symbol']}: {item['amount']} USDT" for item in asset_data['details']])
+        else:
+            details = "无"
+        return (
+            f"{emoji} {asset_name}资产\n"
+            f"总资产：{asset_data['total']} USDT\n"
+            f"详细信息：\n{details}"
+        )
+    
     async def handle_asset_command(self, event: AstrMessageEvent) -> str:
         """
         处理资产查询命令
@@ -601,60 +671,28 @@ class BinanceCore:
                 # 获取Alpha资产
                 alpha_data = await self.get_alpha_assets(api_key, secret_key)
                 if alpha_data:
-                    if alpha_data['details']:
-                        details = "\n".join([f"{item['symbol']}: {item['amount']} USDT" for item in alpha_data['details']])
-                    else:
-                        details = "无"
-                    return (
-                        f"📊 Alpha货币资产\n"
-                        f"总资产：{alpha_data['total']} USDT\n"
-                        f"详细信息：\n{details}"
-                    )
+                    return await self._format_asset_details(alpha_data, "Alpha货币", "📊")
                 else:
                     return "❌ 获取Alpha资产失败"
             elif query_type == "资金":
                 # 获取资金账户资产
                 fund_data = await self.get_fund_assets(api_key, secret_key)
                 if fund_data:
-                    if fund_data['details']:
-                        details = "\n".join([f"{item['symbol']}: {item['amount']} USDT" for item in fund_data['details']])
-                    else:
-                        details = "无"
-                    return (
-                        f"💵 资金账户资产\n"
-                        f"总资产：{fund_data['total']} USDT\n"
-                        f"详细信息：\n{details}"
-                    )
+                    return await self._format_asset_details(fund_data, "资金账户", "💵")
                 else:
                     return "❌ 获取资金账户资产失败"
             elif query_type == "现货":
                 # 获取现货账户资产
                 spot_data = await self.get_spot_assets(api_key, secret_key)
                 if spot_data:
-                    if spot_data['details']:
-                        details = "\n".join([f"{item['symbol']}: {item['amount']} USDT" for item in spot_data['details']])
-                    else:
-                        details = "无"
-                    return (
-                        f"📈 现货账户资产\n"
-                        f"总资产：{spot_data['total']} USDT\n"
-                        f"详细信息：\n{details}"
-                    )
+                    return await self._format_asset_details(spot_data, "现货账户", "📈")
                 else:
                     return "❌ 获取现货账户资产失败"
             elif query_type == "合约":
                 # 获取合约账户资产
                 futures_data = await self.get_futures_assets(api_key, secret_key)
                 if futures_data:
-                    if futures_data['details']:
-                        details = "\n".join([f"{item['symbol']}: {item['amount']} USDT" for item in futures_data['details']])
-                    else:
-                        details = "无"
-                    return (
-                        f"🎯 合约账户资产\n"
-                        f"总资产：{futures_data['total']} USDT\n"
-                        f"详细信息：\n{details}"
-                    )
+                    return await self._format_asset_details(futures_data, "合约账户", "🎯")
                 else:
                     return "❌ 获取合约账户资产失败"
             else:
