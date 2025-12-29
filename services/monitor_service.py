@@ -223,7 +223,7 @@ class MonitorService:
                 logger.error(f"价格监控任务执行出错: {str(e)}")
                 await asyncio.sleep(self.monitor_interval)  # 出错后仍继续执行
     
-    async def start_price_monitor(self) -> None:
+    async def start_price_monitor(self, *args, **kwargs) -> None:
         """
         启动价格监控定时任务
         """
@@ -231,7 +231,7 @@ class MonitorService:
             self.price_monitor_task = asyncio.create_task(self._price_monitor_task())
             logger.info("价格监控任务已启动")
     
-    async def stop_price_monitor(self) -> None:
+    async def stop_price_monitor(self, *args, **kwargs) -> None:
         """
         停止价格监控定时任务
         """
