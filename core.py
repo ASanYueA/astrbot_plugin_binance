@@ -31,12 +31,15 @@ class BinanceCore:
         
         # 设置存储目录 - 使用官方推荐的plugin_data目录
         from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+        import pathlib
+        
         self.name = "astrbot_plugin_binance"  # 插件名称
-        self.data_dir = get_astrbot_data_path() / "plugin_data" / self.name
+        # 先将 get_astrbot_data_path() 返回的字符串转换为 Path 对象
+        base_path = pathlib.Path(get_astrbot_data_path())
+        self.data_dir = base_path / "plugin_data" / self.name
         
         # 确保数据目录存在
-        import pathlib
-        pathlib.Path(self.data_dir).mkdir(parents=True, exist_ok=True)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
         
         # 创建aiohttp客户端会话
         self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout))
