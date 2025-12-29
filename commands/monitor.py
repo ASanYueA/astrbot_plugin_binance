@@ -4,7 +4,7 @@ from ..utils.symbol import normalize_symbol
 from astrbot.api import logger
 
 
-async def cmd_monitor(event, config, price_service, monitor_service):
+async def cmd_monitor(event, config, price_service, monitor_service, *args, **kwargs):
     """
     监控命令主函数，分发处理不同的子命令
     
@@ -42,7 +42,7 @@ async def cmd_monitor(event, config, price_service, monitor_service):
         yield event.plain_result("❌ 处理监控命令时发生错误，请稍后重试")
 
 
-async def handle_monitor_set(event, parts, monitor_service):
+async def handle_monitor_set(event, parts, monitor_service, *args, **kwargs):
     """
     处理监控设置命令
     
@@ -103,7 +103,7 @@ async def handle_monitor_set(event, parts, monitor_service):
         yield event.plain_result("❌ 设置监控时发生错误，请稍后重试")
 
 
-async def handle_monitor_cancel(event, parts, monitor_service):
+async def handle_monitor_cancel(event, parts, monitor_service, *args, **kwargs):
     """
     处理监控取消命令
     
@@ -134,7 +134,7 @@ async def handle_monitor_cancel(event, parts, monitor_service):
         yield event.plain_result("❌ 取消监控时发生错误，请稍后重试")
 
 
-async def handle_monitor_list(event, monitor_service):
+async def handle_monitor_list(event, monitor_service, *args, **kwargs):
     """
     处理监控列表查询命令
     
