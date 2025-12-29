@@ -197,7 +197,7 @@ class BinanceCore:
         """
         return await self.api_key_service.get_api_key(user_id)
 
-    async def handle_price_command(self, event: AstrMessageEvent) -> str:
+    async def handle_price_command(self, event: AstrMessageEvent, *args, **kwargs) -> str:
         """
         处理价格查询命令
         :param event: 消息事件
@@ -255,7 +255,7 @@ class BinanceCore:
             logger.error(f"处理价格命令时发生错误: {str(e)}")
             return "❌ 处理请求时发生错误，请稍后重试"
 
-    async def handle_kline_command(self, event: AstrMessageEvent) -> str or Tuple[str, str]:
+    async def handle_kline_command(self, event: AstrMessageEvent, *args, **kwargs) -> str or Tuple[str, str]:
         """
         处理K线图查询命令
         :param event: 消息事件
@@ -351,7 +351,7 @@ class BinanceCore:
         """
         return await self.api_key_service.unbind_api_key(user_id)
 
-    async def handle_bind_command(self, event: AstrMessageEvent) -> str:
+    async def handle_bind_command(self, event: AstrMessageEvent, *args, **kwargs) -> str:
         """
         处理API密钥绑定命令
         :param event: 消息事件
@@ -393,7 +393,7 @@ class BinanceCore:
             logger.error(f"处理绑定命令时发生错误: {str(e)}")
             return "❌ 处理请求时发生错误，请稍后重试"
 
-    async def handle_unbind_command(self, event: AstrMessageEvent) -> str:
+    async def handle_unbind_command(self, event: AstrMessageEvent, *args, **kwargs) -> str:
         """
         处理API密钥解除绑定命令
         :param event: 消息事件
@@ -431,7 +431,7 @@ class BinanceCore:
         """
         await self.monitor_service.stop_price_monitor()
 
-    async def handle_help_command(self, event: AstrMessageEvent) -> str:
+    async def handle_help_command(self, event: AstrMessageEvent, *args, **kwargs) -> str:
         """
         处理帮助命令，显示所有可用命令
         :param event: 消息事件
@@ -621,7 +621,7 @@ class BinanceCore:
             f"详细信息：\n{details}"
         )
     
-    async def handle_asset_command(self, event: AstrMessageEvent) -> str:
+    async def handle_asset_command(self, event: AstrMessageEvent, *args, **kwargs) -> str:
         """
         处理资产查询命令
         :param event: 消息事件
