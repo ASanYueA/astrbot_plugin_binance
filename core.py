@@ -31,8 +31,8 @@ class BinanceCore:
         
         # 设置存储目录
         self.plugin_dir = os.path.dirname(os.path.abspath(__file__))
-        # 使用context.plugin_dir作为数据目录，确保数据保存在正确位置
-        self.data_dir = os.path.join(self.context.plugin_dir, "data")
+        # 使用插件自身目录作为数据目录
+        self.data_dir = os.path.join(self.plugin_dir, "data")
         
         # 确保数据目录存在
         os.makedirs(self.data_dir, exist_ok=True)
@@ -49,10 +49,10 @@ class BinanceCore:
             # 实际项目中需要通过框架提供的接口发送消息
             logger.info(f"准备发送通知：{message}")
         
-        # 初始化服务，统一使用context.plugin_dir作为数据目录
-        self.monitor_service = MonitorService(self.price_service, self.context.plugin_dir, notification_callback=send_notification)
-        self.api_key_service = ApiKeyService(self.context.plugin_dir)
-        self.chart_service = ChartService(self.context.plugin_dir)
+        # 初始化服务，使用插件自身目录作为数据目录
+        self.monitor_service = MonitorService(self.price_service, self.plugin_dir, notification_callback=send_notification)
+        self.api_key_service = ApiKeyService(self.plugin_dir)
+        self.chart_service = ChartService(self.plugin_dir)
     
     async def close(self, *args, **kwargs):
         """关闭aiohttp会话"""
