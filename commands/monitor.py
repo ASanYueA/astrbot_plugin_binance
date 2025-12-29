@@ -14,11 +14,14 @@ async def cmd_monitor(event, config, price_service, monitor_service):
     sub_command = parts[1].lower()
     
     if sub_command == "设置":
-        await handle_monitor_set(event, parts, monitor_service)
+        async for result in handle_monitor_set(event, parts, monitor_service):
+            yield result
     elif sub_command == "取消":
-        await handle_monitor_cancel(event, parts, monitor_service)
+        async for result in handle_monitor_cancel(event, parts, monitor_service):
+            yield result
     elif sub_command == "列表":
-        await handle_monitor_list(event, monitor_service)
+        async for result in handle_monitor_list(event, monitor_service):
+            yield result
     else:
         yield event.plain_result("❌ 不支持的子命令，请使用：设置、取消、列表")
 
