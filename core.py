@@ -259,89 +259,172 @@ class BinanceCore:
         """
         处理K线图查询命令
         :param event: 消息事件
+        :param args: 框架传递的额外位置参数
+        :param kwargs: 框架传递的额外关键字参数
         :return: 回复消息（字符串或图片路径元组）
         """
+        logger.debug(f"handle_kline_command 接收到参数: args={args}, kwargs={kwargs}")
         try:
             # 提取命令参数
             message_content = event.message_str.strip()
             parts = message_content.split()
             
+            # 参数验证与解析
             if len(parts) < 2:
-                return "用法：/kline <交易对> [资产类型] [时间间隔]\n例如：/kline BTCUSDT spot 1h\n\n资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)\n时间间隔：1m, 5m, 15m, 30m, 1h, 4h, 1d"
+                return ("📊 K线图查询\n" 
+                        "用法：/kline <交易对> [资产类型] [时间间隔]\n" 
+                        "示例：/kline BTCUSDT spot 1h\n\n" 
+                        "✅ 支持的资产类型：\n" 
+                        "- spot(现货)\n" 
+                        "- futures(合约)\n" 
+                        "- margin(杠杆)\n" 
+                        "- alpha(Alpha货币)\n\n" 
+                        "✅ 支持的时间间隔：\n" 
+                        "- 1m, 5m, 15m, 30m\n" 
+                        "- 1h, 4h, 1d")
 
-            symbol = parts[1]
+            symbol = parts[1].strip().upper()  # 标准化为大写
             
+            # 增强交易对验证
+            if not symbol or len(symbol) < 4:
+                return "❌ 交易对格式不正确，请检查后重试（如 BTCUSDT、ETHUSDT）"
+            
+            import re
+            if not re.match(r'^[A-Z]+$', symbol):
+                return "❌ 交易对只能包含字母，请检查后重试"
+
             # 解析可选参数
             asset_type = "spot"
             interval = "1h"
             
+            # 验证并设置资产类型
             if len(parts) >= 3:
-                asset_type = parts[2].lower()
-                
-                # 验证资产类型
+                asset_type_param = parts[2].lower()
                 valid_asset_types = ["spot", "futures", "margin", "alpha"]
-                if asset_type not in valid_asset_types:
-                    return f"无效的资产类型: {asset_type}\n支持的资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)"
+                if asset_type_param in valid_asset_types:
+                    asset_type = asset_type_param
+                else:
+                    return f"❌ 无效的资产类型: {asset_type_param}\n支持的资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)"
             
+            # 验证并设置时间间隔
             if len(parts) >= 4:
-                interval = parts[3].lower()
-                
-                # 验证时间间隔
+                interval_param = parts[3].lower()
                 valid_intervals = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
-                if interval not in valid_intervals:
-                    return f"无效的时间间隔: {interval}\n支持的时间间隔：1m, 5m, 15m, 30m, 1h, 4h, 1d"
+                if interval_param in valid_intervals:
+                    interval = interval_param
+                else:
+                    return f"❌ 无效的时间间隔: {interval_param}\n支持的时间间隔：1m, 5m, 15m, 30m, 1h, 4h, 1d"
             
+            # 标准化交易对
             try:
                 normalized_symbol = normalize_symbol(symbol)
             except ValueError as e:
                 return f"❌ {str(e)}"
             
             # 查询K线数据
+            logger.info(f"获取K线数据: {normalized_symbol}, {asset_type}, {interval}")
             kline_data = await self.price_service.get_kline(normalized_symbol, asset_type, interval)
             
             if not kline_data:
-                return f"❌ 获取K线数据失败，请检查交易对和参数是否正确"
+                return ("❌ 获取K线数据失败\n" 
+                        "请检查：\n" 
+                        "1. 交易对是否正确\n" 
+                        "2. 该交易对是否支持所选资产类型\n" 
+                        "3. 网络连接是否正常")
             
             # 生成K线图表
+            logger.info(f"生成K线图表: {normalized_symbol}, {asset_type}, {interval}")
             chart_path = self.chart_service.create_kline_chart(normalized_symbol, kline_data, interval, asset_type)
             
             if chart_path:
                 # 返回图片结果
                 return ("image", chart_path)
             else:
-                # 如果生成图片失败，回退到文本结果
-                # 格式化K线数据输出（只显示最近5条）
-                recent_klines = kline_data[-5:]
-                output_lines = [f"📊 {normalized_symbol} {asset_type} {interval} K线数据（最近5条）"]
+                # 如果生成图片失败，回退到优化的文本结果
+                logger.warning(f"图表生成失败，回退到文本输出: {normalized_symbol}")
+                return self._format_kline_text_output(normalized_symbol, kline_data, asset_type, interval)
                 
-                for kline in recent_klines:
-                    # K线数据结构：[开盘时间, 开盘价, 最高价, 最低价, 收盘价, 成交量, ...]
-                    timestamp = kline[0]
-                    open_price = kline[1]
-                    high_price = kline[2]
-                    low_price = kline[3]
-                    close_price = kline[4]
-                    volume = kline[5]
-                    
-                    # 格式化时间（将毫秒时间戳转换为人类可读格式）
-                    from datetime import datetime
-                    dt = datetime.fromtimestamp(timestamp / 1000)
-                    time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
-                    
-                    # 计算涨跌幅
-                    try:
-                        change = (float(close_price) - float(open_price)) / float(open_price) * 100
-                        change_str = f"{'+' if change > 0 else ''}{change:.2f}%"
-                    except:
-                        change_str = "N/A"
-                    
-                    output_lines.append(f"[{time_str}] O: {open_price} H: {high_price} L: {low_price} C: {close_price} ({change_str}) V: {volume}")
-                
-                return "\n".join(output_lines)
-                
+        except ValueError as e:
+            logger.error(f"K线命令参数错误: {str(e)}", exc_info=True)
+            return f"❌ 参数错误：{str(e)}"
         except Exception as e:
-            logger.error(f"处理K线命令时发生错误: {str(e)}")
-            return "❌ 处理请求时发生错误，请稍后重试"
+            logger.error(f"处理K线命令时发生错误: {str(e)}", exc_info=True)
+            return ("❌ 处理请求时发生错误\n" 
+                    "请稍后重试，或联系管理员")
+                    
+    def _format_kline_text_output(self, symbol: str, kline_data: list, asset_type: str, interval: str) -> str:
+        """
+        格式化K线数据为文本输出
+        :param symbol: 交易对
+        :param kline_data: K线数据列表
+        :param asset_type: 资产类型
+        :param interval: 时间间隔
+        :return: 格式化的文本输出
+        """
+        if not kline_data:
+            return "❌ K线数据为空"
+            
+        # 只显示最近10条数据
+        recent_klines = kline_data[-10:]
+        output_lines = [f"📊 {symbol} {asset_type} {interval} K线数据（最近10条）"]
+        output_lines.append("=" * 60)
+        
+        # 资产类型显示名称映射
+        asset_type_names = {
+            "spot": "现货",
+            "futures": "合约",
+            "margin": "杠杆",
+            "alpha": "Alpha货币"
+        }
+        
+        for i, kline in enumerate(recent_klines, 1):
+            try:
+                # K线数据结构：[开盘时间, 开盘价, 最高价, 最低价, 收盘价, 成交量, ...]
+                timestamp = kline[0]
+                open_price = float(kline[1])
+                high_price = float(kline[2])
+                low_price = float(kline[3])
+                close_price = float(kline[4])
+                volume = float(kline[5])
+                
+                # 格式化时间（将毫秒时间戳转换为人类可读格式）
+                from datetime import datetime
+                dt = datetime.fromtimestamp(timestamp / 1000)
+                time_str = dt.strftime("%m-%d %H:%M")
+                
+                # 计算涨跌幅和涨跌额
+                change = (close_price - open_price) / open_price * 100
+                change_amount = close_price - open_price
+                
+                # 添加颜色标识
+                if close_price > open_price:
+                    change_str = f"🔴 +{change:.2f}% (+{change_amount:.4f})"
+                elif close_price < open_price:
+                    change_str = f"🟢 {change:.2f}% ({change_amount:.4f})"
+                else:
+                    change_str = f"⚪ 0.00% (0.0000)"
+                
+                # 格式化价格（根据价格范围选择合适的小数位数）
+                price_decimals = 8 if close_price < 1 else 2
+                
+                output_lines.append(
+                    f"[{i:2d}] {time_str} | "
+                    f"O: {open_price:.{price_decimals}f} | "
+                    f"H: {high_price:.{price_decimals}f} | "
+                    f"L: {low_price:.{price_decimals}f} | "
+                    f"C: {close_price:.{price_decimals}f} | "
+                    f"{change_str} | "
+                    f"V: {volume:.4f}"
+                )
+            except Exception as e:
+                logger.error(f"格式化K线数据时发生错误: {str(e)}")
+                continue
+        
+        output_lines.append("=" * 60)
+        output_lines.append(f"💡 数据更新时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        output_lines.append(f"💡 资产类型: {asset_type_names.get(asset_type, asset_type)}")
+        
+        return "\n".join(output_lines)
 
     async def unbind_api_key(self, user_id: str) -> bool:
         """
