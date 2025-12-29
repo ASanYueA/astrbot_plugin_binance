@@ -19,9 +19,9 @@ class ChartService:
     """
     图表服务类，负责生成K线图
     """
-    def __init__(self, plugin_dir: str):
-        self.plugin_dir = plugin_dir
-        self.temp_dir = os.path.join(self.plugin_dir, 'temp')
+    def __init__(self, data_dir: str):
+        self.data_dir = data_dir
+        self.temp_dir = os.path.join(self.data_dir, 'temp')
         
         # 确保临时目录存在
         os.makedirs(self.temp_dir, exist_ok=True)
