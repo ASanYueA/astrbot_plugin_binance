@@ -10,7 +10,7 @@ from astrbot.api import logger
 # 导入核心模块
 from .core import BinanceCore
 
-# 导出插件类
+# 导出插件
 @register("astrbot_plugin_binance", "Binance Plugin Developer", "币安现货价格查询与API绑定插件", "1.0.0")
 class BinancePlugin(Star):
     def __init__(self, context: Context, *args, **kwargs):
@@ -83,44 +83,6 @@ class BinancePlugin(Star):
             logger.error(f"处理帮助命令时发生错误: {str(e)}")
             yield event.plain_result(f"处理请求时发生错误: {str(e)}")
 
-    @filter.command("kline")
-    async def handle_kline(self, event: AstrMessageEvent, *args, **kwargs):
-        """查询K线数据，使用方法：/kline <交易对> [资产类型] [时间间隔]
-        资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)
-        时间间隔：1m, 5m, 15m, 30m, 1h, 4h, 1d
-        示例：/kline BTCUSDT spot 1h"""
-        logger.info(f"开始处理K线命令: {event.message_str}")
-        logger.debug(f"K线命令参数: args={args}, kwargs={kwargs}")
-        try:
-            # 调用核心处理方法，获取结果
-            result = await self.binance_core.handle_kline_command(event, *args, **kwargs)
-            
-            # 检查结果类型
-            if isinstance(result, tuple) and len(result) >= 2 and result[0] == "image":
-                # 如果是图片结果，发送图片
-                image_path = result[1]
-                if hasattr(event, "image_result"):
-                    logger.info(f"发送K线图片: {image_path}")
-                    yield event.image_result(image_path)
-                else:
-                    # 回退到文本提示
-                    logger.warning("框架不支持图片发送，回退到文本提示")
-                    yield event.plain_result("❌ 无法发送图片，当前框架版本不支持图片功能")
-            elif isinstance(result, str):
-                # 文本结果，直接发送
-                logger.info(f"发送K线文本结果，长度: {len(result)}字符")
-                yield event.plain_result(result)
-            else:
-                # 未知结果类型，记录错误
-                logger.error(f"K线命令返回未知结果类型: {type(result)}, 结果内容: {result}")
-                yield event.plain_result("❌ 处理结果格式错误，请稍后重试")
-        except ValueError as e:
-            logger.error(f"K线命令参数错误: {str(e)}")
-            yield event.plain_result(f"❌ 参数错误：{str(e)}")
-        except Exception as e:
-            logger.error(f"处理K线命令时发生错误: {str(e)}", exc_info=True)
-            yield event.plain_result("❌ 处理请求时发生错误，请稍后重试")
-
     @filter.command("监控")
     async def handle_monitor(self, event: AstrMessageEvent, *args, **kwargs):
         """价格监控命令，使用方法：
@@ -128,7 +90,7 @@ class BinancePlugin(Star):
 /监控 取消 <监控ID> - 取消指定的价格监控
 /监控 列表 - 查看您的所有价格监控
 资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)
-方向：up(上涨到), down(下跌到)
+方向：up(上涨), down(下跌)
 示例：/监控 设置 BTCUSDT futures 50000 up"""
         logger.info(f"开始处理监控命令: {event.message_str}")
         try:
