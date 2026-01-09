@@ -95,7 +95,14 @@ class BinanceCore:
         try:
             # 标准化交易对格式
             try:
-                normalized_symbol = normalize_symbol(symbol)
+                if asset_type == "alpha":
+                    # Alpha类型可以接受单独的币种符号（如TA）
+                    if not symbol or len(symbol.strip()) < 1:
+                        raise ValueError("币种符号不能为空")
+                    normalized_symbol = symbol.strip().upper()
+                else:
+                    # 其他类型需要完整的交易对格式
+                    normalized_symbol = normalize_symbol(symbol)
             except ValueError as e:
                 logger.error(f"获取{asset_type}价格时发生错误: {str(e)}")
                 return None
@@ -268,7 +275,14 @@ class BinanceCore:
             
             # 验证交易对格式
             try:
-                normalized_symbol = normalize_symbol(symbol)
+                if asset_type == "alpha":
+                    # Alpha类型可以接受单独的币种符号（如TA）
+                    if not symbol or len(symbol.strip()) < 1:
+                        raise ValueError("币种符号不能为空")
+                    normalized_symbol = symbol.strip().upper()
+                else:
+                    # 其他类型需要完整的交易对格式
+                    normalized_symbol = normalize_symbol(symbol)
             except ValueError as e:
                 return f"❌ {str(e)}"
             
@@ -451,7 +465,14 @@ class BinanceCore:
             
             # 规范化交易对
             try:
-                normalized_symbol = normalize_symbol(symbol)
+                if asset_type_param == "alpha":
+                    # Alpha类型可以接受单独的币种符号（如TA）
+                    if not symbol or len(symbol.strip()) < 1:
+                        raise ValueError("币种符号不能为空")
+                    normalized_symbol = symbol.strip().upper()
+                else:
+                    # 其他类型需要完整的交易对格式
+                    normalized_symbol = normalize_symbol(symbol)
             except ValueError as e:
                 return f"❌ {str(e)}"
             
