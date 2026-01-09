@@ -49,15 +49,6 @@ class BinancePrivateAPI:
             return assets
         return "💰 资金账户\n" + "\n".join(f'{a["asset"]}: {a["free"]}' for a in assets)
 
-    async def get_alpha_assets(self):
-        data = await self._get("/sapi/v1/asset/assetDetail", {})
-        assets = []
-        for k, v in data.items():
-            bal = v.get("availableBalance", "0")
-            if float(bal) > 0:
-                assets.append(f"{k}: {bal}")
-        return "🅰 Alpha 账户\n" + ("\n".join(assets) if assets else "无资产")
-
     async def get_future_assets(self):
         data = await self._get("/fapi/v2/account", {})
         assets = [a for a in data["assets"] if float(a["walletBalance"]) > 0]
