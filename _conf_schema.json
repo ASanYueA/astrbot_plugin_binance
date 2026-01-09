@@ -4,11 +4,6 @@
     "type": "string",
     "default": "https://api.binance.com"
   },
-  "api_alpha_url": {
-    "description": "币安Alpha API地址",
-    "type": "string",
-    "default": "https://api.binance.com"
-  },
   "api_futures_url": {
     "description": "币安合约API地址",
     "type": "string",
