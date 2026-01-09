@@ -89,20 +89,13 @@ class BinanceCore:
         """
         通过币安公共API查询交易对价格
         :param symbol: 交易对，如BTCUSDT
-        :param asset_type: 资产类型，可选值：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)
+        :param asset_type: 资产类型，可选值：spot(现货), futures(合约), margin(杠杆)
         :return: 价格，或None表示失败
         """
         try:
             # 标准化交易对格式
             try:
-                if asset_type == "alpha":
-                    # Alpha类型可以接受单独的币种符号（如TA）
-                    if not symbol or len(symbol.strip()) < 1:
-                        raise ValueError("币种符号不能为空")
-                    normalized_symbol = symbol.strip().upper()
-                else:
-                    # 其他类型需要完整的交易对格式
-                    normalized_symbol = normalize_symbol(symbol)
+                normalized_symbol = normalize_symbol(symbol)
             except ValueError as e:
                 logger.error(f"获取{asset_type}价格时发生错误: {str(e)}")
                 return None
@@ -121,11 +114,6 @@ class BinanceCore:
                 # 杠杆API
                 api_domain = self.api_url
                 url = f"{api_domain}/sapi/v1/margin/market-price"
-            elif asset_type == "alpha":
-                # Alpha货币 - 使用币安Alpha API
-                api_alpha_url = self.config.get("api_alpha_url", "https://api.binance.com")
-                api_domain = api_alpha_url
-                url = f"{api_domain}/sapi/v1/alpha/ticker/price"
             else:
                 logger.error(f"不支持的资产类型: {asset_type}")
                 return None
@@ -156,22 +144,6 @@ class BinanceCore:
                             logger.error(f"API错误代码: {error_data['code']}, 错误信息: {error_data['msg']}")
                     except Exception:
                         pass
-                    
-                    # 如果是Alpha类型查询失败，尝试使用现货价格作为后备
-                    if asset_type == "alpha":
-                        logger.info(f"Alpha价格查询失败，尝试使用现货价格作为后备")
-                        try:
-                            spot_url = f"{self.api_url}/api/v3/ticker/price"
-                            async with self.session.get(spot_url, params=params) as spot_response:
-                                if spot_response.status == 200:
-                                    spot_data = await spot_response.json()
-                                    logger.info(f"成功获取现货价格作为Alpha价格的后备: {spot_data.get('price')}")
-                                    return float(spot_data.get('price', 0))
-                                else:
-                                    spot_response_text = await spot_response.text()
-                                    logger.error(f"现货价格查询也失败，状态码: {spot_response.status}，响应内容: {spot_response_text}")
-                        except Exception as e:
-                            logger.error(f"获取后备现货价格时发生错误: {str(e)}")
                     
                     return None
         except Exception as e:
@@ -268,21 +240,14 @@ class BinanceCore:
             asset_type = "spot"  # 默认现货
             if len(parts) >= 3:
                 asset_type_param = parts[2].lower()
-                if asset_type_param in ["spot", "futures", "margin", "alpha"]:
+                if asset_type_param in ["spot", "futures", "margin"]:
                     asset_type = asset_type_param
                 else:
-                    return f"❌ 不支持的资产类型：{asset_type_param}，支持的类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)"
+                    return f"❌ 不支持的资产类型：{asset_type_param}，支持的类型：spot(现货), futures(合约), margin(杠杆)"
             
             # 验证交易对格式
             try:
-                if asset_type == "alpha":
-                    # Alpha类型可以接受单独的币种符号（如TA）
-                    if not symbol or len(symbol.strip()) < 1:
-                        raise ValueError("币种符号不能为空")
-                    normalized_symbol = symbol.strip().upper()
-                else:
-                    # 其他类型需要完整的交易对格式
-                    normalized_symbol = normalize_symbol(symbol)
+                normalized_symbol = normalize_symbol(symbol)
             except ValueError as e:
                 return f"❌ {str(e)}"
             
@@ -295,8 +260,7 @@ class BinanceCore:
                 asset_type_names = {
                     "spot": "现货",
                     "futures": "合约",
-                    "margin": "杠杆",
-                    "alpha": "Alpha货币"
+                    "margin": "杠杆"
                 }
                 return f"✅ {normalized_symbol} ({asset_type_names[asset_type]}) 当前价格：{price:.8f} USDT"
             else:
@@ -448,8 +412,8 @@ class BinanceCore:
             direction_param = parts[5].lower()
             
             # 验证资产类型
-            if asset_type_param not in ["spot", "futures", "margin", "alpha"]:
-                return "❌ 不支持的资产类型，请使用：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)"
+            if asset_type_param not in ["spot", "futures", "margin"]:
+                return "❌ 不支持的资产类型，请使用：spot(现货), futures(合约), margin(杠杆)"
             
             # 验证方向参数
             if direction_param not in ["up", "down"]:
@@ -465,14 +429,7 @@ class BinanceCore:
             
             # 规范化交易对
             try:
-                if asset_type_param == "alpha":
-                    # Alpha类型可以接受单独的币种符号（如TA）
-                    if not symbol or len(symbol.strip()) < 1:
-                        raise ValueError("币种符号不能为空")
-                    normalized_symbol = symbol.strip().upper()
-                else:
-                    # 其他类型需要完整的交易对格式
-                    normalized_symbol = normalize_symbol(symbol)
+                normalized_symbol = normalize_symbol(symbol)
             except ValueError as e:
                 return f"❌ {str(e)}"
             
@@ -510,8 +467,7 @@ class BinanceCore:
                 asset_type_text = {
                     "spot": "现货",
                     "futures": "合约",
-                    "margin": "杠杆",
-                    "alpha": "Alpha货币"
+                    "margin": "杠杆"
                 }[asset_type_param]
                 
                 return f"✅ 价格监控设置成功！\n监控ID：{monitor_id}\n交易对：{normalized_symbol} ({asset_type_text})\n监控条件：{direction_text} {target_price} USDT\n{current_price_str}"
@@ -600,8 +556,7 @@ class BinanceCore:
                 asset_type_text = {
                     "spot": "现货",
                     "futures": "合约",
-                    "margin": "杠杆",
-                    "alpha": "Alpha货币"
+                    "margin": "杠杆"
                 }[asset_type]
                 direction_text = "上涨到" if direction == "up" else "下跌到"
                 status_text = "🟢 活跃" if is_active else "🔴 已关闭"
@@ -682,8 +637,7 @@ class BinanceCore:
                             asset_type_text = {
                                 "spot": "现货",
                                 "futures": "合约",
-                                "margin": "杠杆",
-                                "alpha": "Alpha货币"
+                                "margin": "杠杆"
                             }[asset_type]
                             direction_text = "上涨到" if direction == "up" else "下跌到"
                             
@@ -717,7 +671,7 @@ class BinanceCore:
             "📚 币安插件命令列表\n"
             "=================\n"
             "/price <交易对> [资产类型] - 查询币安资产价格\n"
-            "  资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)\n"
+            "  资产类型：spot(现货), futures(合约), margin(杠杆)\n"
             "  示例：/price BTCUSDT futures\n"
             "\n"
             "/绑定 <API_KEY> <SECRET_KEY> - 绑定币安API密钥\n"
@@ -726,11 +680,11 @@ class BinanceCore:
             "/解除绑定 - 解除绑定币安API密钥\n"
             "\n"
             "/资产 [查询类型] - 查询账户资产（需先绑定API）\n"
-            "  查询类型：alpha/资金/现货/合约，不输入则查询总览\n"
-            "  示例：/资产 alpha\n"
+            "  查询类型：资金/现货/合约，不输入则查询总览\n"
+            "  示例：/资产 现货\n"
             "\n"
             "/监控 设置 <交易对> <资产类型> <目标价格> <方向> - 设置价格监控\n"
-            "  资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)\n"
+            "  资产类型：spot(现货), futures(合约), margin(杠杆)\n"
             "  方向：up(上涨到), down(下跌到)\n"
             "  示例：/监控 设置 BTCUSDT futures 50000 up\n"
             "\n"
@@ -815,58 +769,10 @@ class BinanceCore:
             "total_asset": 14.4,
             "today_profit": -1.74,
             "profit_rate": -10.75,
-            "alpha_asset": 14.37,
             "fund_asset": 0.03146084,
             "spot_asset": 0.00,
             "futures_asset": 0.00
         }
-
-    async def get_alpha_assets(self, api_key: str, secret_key: str) -> Optional[Dict]:
-        """
-        获取Alpha资产信息
-        :param api_key: API密钥的key
-        :param secret_key: API密钥的secret
-        :return: Alpha资产信息字典，或None表示失败
-        """
-        try:
-            # 获取Alpha资产信息
-            alpha_data = await self.authenticated_request(
-                "GET",
-                "/sapi/v1/alpha/asset",
-                {},
-                api_key,
-                secret_key
-            )
-            if not alpha_data:
-                return None
-            
-            # 计算Alpha资产总资产
-            total_asset = 0.0
-            details = []
-            
-            # 处理每个资产
-            for asset in alpha_data.get("balances", []):
-                symbol = asset.get("asset")
-                free = float(asset.get("free", "0"))
-                locked = float(asset.get("locked", "0"))
-                total = free + locked
-                
-                if total > 0:
-                    # 获取资产的USDT价格
-                    usdt_symbol = f"{symbol}USDT"
-                    price = await self.get_price(usdt_symbol, "spot")
-                    if price:
-                        asset_value = total * price
-                        total_asset += asset_value
-                        details.append({"symbol": symbol, "amount": asset_value})
-            
-            return {
-                "total": round(total_asset, 2),
-                "details": details
-            }
-        except Exception as e:
-            logger.error(f"获取Alpha资产时发生错误: {str(e)}")
-            return None
 
     async def get_fund_assets(self, api_key: str, secret_key: str) -> Optional[Dict]:
         """
@@ -1096,7 +1002,7 @@ class BinanceCore:
             query_type = "overview"  # 默认查询总览
             if len(parts) >= 2:
                 query_param = parts[1].lower()
-                if query_param in ["alpha", "资金", "现货", "合约"]:
+                if query_param in ["资金", "现货", "合约"]:
                     query_type = query_param
             
             # 根据查询类型获取资产信息
@@ -1110,28 +1016,12 @@ class BinanceCore:
                         f"今日盈亏：{account_data['today_profit']} USDT ({account_data['profit_rate']}%)\n"\
                         f"\n"\
                         f"币种\t\t账户\n"\
-                        f"Alpha\t\t{account_data['alpha_asset']} USDT\n"\
                         f"资金\t\t{account_data['fund_asset']} USDT\n"\
                         f"现货\t\t{account_data['spot_asset']} USDT\n"\
                         f"合约\t\t{account_data['futures_asset']} USDT"
                     )
                 else:
                     return "❌ 获取账户总览失败"
-            elif query_type == "alpha":
-                # 获取Alpha资产
-                alpha_data = await self.get_alpha_assets(api_key, secret_key)
-                if alpha_data:
-                    if alpha_data['details']:
-                        details = "\n".join([f"{item['symbol']}: {item['amount']} USDT" for item in alpha_data['details']])
-                    else:
-                        details = "无"
-                    return (
-                        f"📊 Alpha货币资产\n"\
-                        f"总资产：{alpha_data['total']} USDT\n"\
-                        f"详细信息：\n{details}"
-                    )
-                else:
-                    return "❌ 获取Alpha资产失败"
             elif query_type == "资金":
                 # 获取资金账户资产
                 fund_data = await self.get_fund_assets(api_key, secret_key)
@@ -1178,7 +1068,7 @@ class BinanceCore:
                 else:
                     return "❌ 获取合约账户资产失败"
             else:
-                return "❌ 不支持的查询类型，请使用 alpha/资金/现货/合约"
+                return "❌ 不支持的查询类型，请使用 资金/现货/合约"
                 
         except Exception as e:
             logger.error(f"处理资产命令时发生错误: {str(e)}")
