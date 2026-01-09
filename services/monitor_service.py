@@ -16,9 +16,10 @@ class MonitorService:
     """
     价格监控服务类，处理价格监控的设置、取消、检查等功能
     """
-    def __init__(self, price_service: PriceService, data_dir: str, notification_callback=None):
+    def __init__(self, price_service: PriceService, plugin_dir: str):
         self.price_service = price_service
-        self.data_dir = data_dir
+        self.plugin_dir = plugin_dir
+        self.data_dir = os.path.join(self.plugin_dir, "data")
         self.price_monitor_file = os.path.join(self.data_dir, "price_monitors.json")
         
         # 确保数据目录存在
@@ -27,9 +28,6 @@ class MonitorService:
         # 价格监控定时任务
         self.price_monitor_task = None
         self.monitor_interval = 60  # 默认每分钟检查一次
-        
-        # 通知回调函数
-        self.notification_callback = notification_callback
     
     async def load_price_monitors(self) -> Dict[str, Dict]:
         """
@@ -192,12 +190,9 @@ class MonitorService:
                             # 记录日志
                             logger.info(f"价格监控触发：{notification_message}")
                             
-                            # 通过回调函数发送通知
-                            if self.notification_callback:
-                                try:
-                                    await self.notification_callback(notification_message)
-                                except Exception as e:
-                                    logger.error(f"发送通知失败：{str(e)}")
+                            # TODO: 实现通过事件系统发送通知，需要框架支持
+                            # 由于在定时任务中没有event实例，暂时使用日志记录
+                            # 实际项目中应使用框架提供的消息发送接口
                             
                             # 触发后关闭监控，避免重复提醒
                             monitor_data["is_active"] = False
@@ -223,7 +218,7 @@ class MonitorService:
                 logger.error(f"价格监控任务执行出错: {str(e)}")
                 await asyncio.sleep(self.monitor_interval)  # 出错后仍继续执行
     
-    async def start_price_monitor(self, *args, **kwargs) -> None:
+    async def start_price_monitor(self) -> None:
         """
         启动价格监控定时任务
         """
@@ -231,7 +226,7 @@ class MonitorService:
             self.price_monitor_task = asyncio.create_task(self._price_monitor_task())
             logger.info("价格监控任务已启动")
     
-    async def stop_price_monitor(self, *args, **kwargs) -> None:
+    async def stop_price_monitor(self) -> None:
         """
         停止价格监控定时任务
         """
