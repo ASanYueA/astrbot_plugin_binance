@@ -266,6 +266,12 @@ class BinanceCore:
                 else:
                     return f"❌ 不支持的资产类型：{asset_type_param}，支持的类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)"
             
+            # 验证交易对格式
+            try:
+                normalized_symbol = normalize_symbol(symbol)
+            except ValueError as e:
+                return f"❌ {str(e)}"
+            
             # 查询价格
             price = await self.get_price(symbol, asset_type)
             
