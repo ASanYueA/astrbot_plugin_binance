@@ -21,16 +21,14 @@ async def cmd_asset(event, config):
         text = await api.get_asset_overview()
     else:
         t = parts[1]
-        if t == "alpha":
-            text = await api.get_alpha_assets()
-        elif t == "资金":
+        if t == "资金":
             text = await api.get_funding_assets()
         elif t == "现货":
             text = await api.get_spot_assets()
         elif t == "合约":
             text = await api.get_future_assets()
         else:
-            yield event.plain_result("参数错误：alpha / 资金 / 现货 / 合约")
+            yield event.plain_result("参数错误：资金 / 现货 / 合约")
             return
 
     yield event.plain_result(text)
