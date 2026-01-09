@@ -394,6 +394,8 @@ class BinanceCore:
         :return: 是否保存成功
         """
         try:
+            # 确保目录存在
+            os.makedirs(os.path.dirname(self.price_monitor_file), exist_ok=True)
             with open(self.price_monitor_file, "w", encoding="utf-8") as f:
                 json.dump(monitors, f, ensure_ascii=False, indent=2)
             return True
