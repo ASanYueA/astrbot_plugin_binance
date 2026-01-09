@@ -112,11 +112,10 @@ class BinanceCore:
                 api_domain = self.api_url
                 url = f"{api_domain}/sapi/v1/margin/market-price"
             elif asset_type == "alpha":
-                # Alpha货币 - 目前没有公开的价格API，返回对应现货价格
-                # 从配置中获取Alpha API域名，如果没有则使用默认值
-                api_alpha_url = self.config.get("api_alpha_url", self.api_url)
+                # Alpha货币 - 使用币安Alpha API
+                api_alpha_url = self.config.get("api_alpha_url", "https://api.binance.com")
                 api_domain = api_alpha_url
-                url = f"{api_domain}/api/v3/ticker/price"
+                url = f"{api_domain}/sapi/v1/alpha/ticker/price"
             else:
                 logger.error(f"不支持的资产类型: {asset_type}")
                 return None
@@ -792,55 +791,253 @@ class BinanceCore:
 
     async def get_alpha_assets(self, api_key: str, secret_key: str) -> Optional[Dict]:
         """
-        获取Alpha资产（模拟数据）
-        :param api_key: 用户的api_key
-        :param secret_key: 用户的secret_key
-        :return: Alpha资产数据
+        获取Alpha资产信息
+        :param api_key: API密钥的key
+        :param secret_key: API密钥的secret
+        :return: Alpha资产信息字典，或None表示失败
         """
-        return {
-            "total": 14.37,
-            "details": [
-                {"symbol": "USDT", "amount": 14.37}
-            ]
-        }
+        try:
+            # 获取Alpha资产信息
+            alpha_data = await self.authenticated_request(
+                "GET",
+                "/sapi/v1/alpha/asset",
+                {},
+                api_key,
+                secret_key
+            )
+            if not alpha_data:
+                return None
+            
+            # 计算Alpha资产总资产
+            total_asset = 0.0
+            details = []
+            
+            # 处理每个资产
+            for asset in alpha_data.get("balances", []):
+                symbol = asset.get("asset")
+                free = float(asset.get("free", "0"))
+                locked = float(asset.get("locked", "0"))
+                total = free + locked
+                
+                if total > 0:
+                    # 获取资产的USDT价格
+                    usdt_symbol = f"{symbol}USDT"
+                    price = await self.get_price(usdt_symbol, "spot")
+                    if price:
+                        asset_value = total * price
+                        total_asset += asset_value
+                        details.append({"symbol": symbol, "amount": asset_value})
+            
+            return {
+                "total": round(total_asset, 2),
+                "details": details
+            }
+        except Exception as e:
+            logger.error(f"获取Alpha资产时发生错误: {str(e)}")
+            return None
 
     async def get_fund_assets(self, api_key: str, secret_key: str) -> Optional[Dict]:
         """
-        获取资金账户资产（模拟数据）
-        :param api_key: 用户的api_key
-        :param secret_key: 用户的secret_key
-        :return: 资金账户资产数据
+        获取资金账户资产信息
+        :param api_key: API密钥的key
+        :param secret_key: API密钥的secret
+        :return: 资金账户资产信息字典，或None表示失败
         """
-        return {
-            "total": 0.03146084,
-            "details": [
-                {"symbol": "USDT", "amount": 0.03146084}
-            ]
-        }
+        try:
+            # 获取资金账户信息
+            fund_data = await self.authenticated_request(
+                "GET",
+                "/sapi/v1/fund/account",
+                {},
+                api_key,
+                secret_key
+            )
+            if not fund_data:
+                return None
+            
+            # 计算资金账户总资产
+            total_asset = 0.0
+            details = []
+            
+            # 处理每个资产
+            for asset in fund_data.get("balances", []):
+                symbol = asset.get("asset")
+                free = float(asset.get("free", "0"))
+                locked = float(asset.get("locked", "0"))
+                total = free + locked
+                
+                if total > 0:
+                    # 如果是USDT，直接相加
+                    if symbol == "USDT":
+                        total_asset += total
+                        details.append({"symbol": symbol, "amount": total})
+                    else:
+                        # 获取其他资产的USDT价格
+                        usdt_symbol = f"{symbol}USDT"
+                        price = await self.get_price(usdt_symbol, "spot")
+                        if price:
+                            asset_value = total * price
+                            total_asset += asset_value
+                            details.append({"symbol": symbol, "amount": asset_value})
+            
+            return {
+                "total": round(total_asset, 2),
+                "details": details
+            }
+        except Exception as e:
+            logger.error(f"获取资金账户资产时发生错误: {str(e)}")
+            return None
+
+    async def get_account_info(self, api_key: str, secret_key: str) -> Optional[Dict]:
+        """
+        获取币安账户信息
+        :param api_key: API密钥的key
+        :param secret_key: API密钥的secret
+        :return: 账户信息字典，或None表示失败
+        """
+        try:
+            # 调用币安API获取账户信息
+            account_data = await self.authenticated_request(
+                "GET",
+                "/api/v3/account",
+                {},
+                api_key,
+                secret_key
+            )
+            
+            return account_data
+        except Exception as e:
+            logger.error(f"获取账户信息时发生错误: {str(e)}")
+            return None
+
+    async def get_futures_account_info(self, api_key: str, secret_key: str) -> Optional[Dict]:
+        """
+        获取合约账户信息
+        :param api_key: API密钥的key
+        :param secret_key: API密钥的secret
+        :return: 合约账户信息字典，或None表示失败
+        """
+        try:
+            # 构建签名参数
+            params = {}
+            params["timestamp"] = int(time.time() * 1000)
+            
+            # 生成查询字符串
+            query_string = "&".join([f"{key}={value}" for key, value in sorted(params.items())])
+            
+            # 生成HMAC-SHA256签名
+            signature = hmac.new(
+                secret_key.encode("utf-8"),
+                query_string.encode("utf-8"),
+                hashlib.sha256
+            ).hexdigest()
+            
+            # 将签名添加到参数中
+            params["signature"] = signature
+            
+            # 发送请求
+            url = "https://fapi.binance.com/fapi/v2/account"
+            headers = {
+                "X-MBX-APIKEY": api_key
+            }
+            
+            async with self.session.get(url, params=params, headers=headers) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    logger.error(f"获取合约账户信息失败，状态码: {response.status}")
+                    logger.error(f"响应内容: {await response.text()}")
+                    return None
+        except Exception as e:
+            logger.error(f"获取合约账户信息时发生错误: {str(e)}")
+            return None
 
     async def get_spot_assets(self, api_key: str, secret_key: str) -> Optional[Dict]:
         """
-        获取现货账户资产（模拟数据）
-        :param api_key: 用户的api_key
-        :param secret_key: 用户的secret_key
-        :return: 现货账户资产数据
+        获取现货账户资产信息
+        :param api_key: API密钥的key
+        :param secret_key: API密钥的secret
+        :return: 现货账户资产信息字典，或None表示失败
         """
-        return {
-            "total": 0.00,
-            "details": []
-        }
+        try:
+            # 获取账户信息
+            account_data = await self.get_account_info(api_key, secret_key)
+            if not account_data:
+                return None
+            
+            # 计算现货账户总资产（使用USDT计价）
+            total_asset = 0.0
+            details = []
+            
+            # 处理每个资产
+            for asset in account_data.get("balances", []):
+                symbol = asset.get("asset")
+                free = float(asset.get("free", "0"))
+                locked = float(asset.get("locked", "0"))
+                total = free + locked
+                
+                if total > 0:
+                    # 如果是USDT，直接相加
+                    if symbol == "USDT":
+                        total_asset += total
+                        details.append({"symbol": symbol, "amount": total})
+                    else:
+                        # 获取其他资产的USDT价格
+                        usdt_symbol = f"{symbol}USDT"
+                        price = await self.get_price(usdt_symbol, "spot")
+                        if price:
+                            asset_value = total * price
+                            total_asset += asset_value
+                            details.append({"symbol": symbol, "amount": asset_value})
+            
+            return {
+                "total": round(total_asset, 2),
+                "details": details
+            }
+        except Exception as e:
+            logger.error(f"获取现货账户资产时发生错误: {str(e)}")
+            return None
 
     async def get_futures_assets(self, api_key: str, secret_key: str) -> Optional[Dict]:
         """
-        获取合约账户资产（模拟数据）
-        :param api_key: 用户的api_key
-        :param secret_key: 用户的secret_key
-        :return: 合约账户资产数据
+        获取合约账户资产信息
+        :param api_key: API密钥的key
+        :param secret_key: API密钥的secret
+        :return: 合约账户资产信息字典，或None表示失败
         """
-        return {
-            "total": 0.00,
-            "details": []
-        }
+        try:
+            # 获取合约账户信息
+            futures_data = await self.get_futures_account_info(api_key, secret_key)
+            if not futures_data:
+                return None
+            
+            # 计算合约账户总资产
+            total_asset = float(futures_data.get("totalWalletBalance", "0"))
+            
+            # 获取所有持仓信息
+            positions = futures_data.get("positions", [])
+            details = []
+            
+            # 处理每个持仓
+            for position in positions:
+                symbol = position.get("symbol")
+                positionAmt = float(position.get("positionAmt", "0"))
+                
+                if abs(positionAmt) > 0:
+                    # 获取当前价格
+                    price = await self.get_price(symbol, "futures")
+                    if price:
+                        # 计算持仓价值
+                        position_value = abs(positionAmt) * price
+                        details.append({"symbol": symbol, "amount": position_value})
+            
+            return {
+                "total": round(total_asset, 2),
+                "details": details
+            }
+        except Exception as e:
+            logger.error(f"获取合约账户资产时发生错误: {str(e)}")
+            return None
 
     async def handle_asset_command(self, event: AstrMessageEvent) -> str:
         """
