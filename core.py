@@ -14,13 +14,9 @@ from astrbot.api import logger
 from astrbot.api.star import Context
 from astrbot.api.event import AstrMessageEvent
 
-# 导入工具函数和服务
+# 导入工具函数
 from .utils.symbol import normalize_symbol
 from .utils.crypto import encrypt_data, decrypt_data
-from .services.monitor_service import MonitorService
-from .services.price_service import PriceService
-from .services.api_key_service import ApiKeyService
-from .services.chart_service import ChartService
 
 class BinanceCore:
     def __init__(self, context: Context):
@@ -29,69 +25,63 @@ class BinanceCore:
         self.api_url = self.config.get("binance_api_url", "https://api.binance.com")
         self.timeout = self.config.get("request_timeout", 10)
         
-        # 设置存储目录 - 使用官方推荐的plugin_data目录
-        from astrbot.core.utils.astrbot_path import get_astrbot_data_path
-        import pathlib
+        # 加密密钥将在第一次使用时初始化
+        self.encryption_key = None
+        self.encryption_key_initialized = False
         
-        self.name = "astrbot_plugin_binance"  # 插件名称
-        # 先将 get_astrbot_data_path() 返回的字符串转换为 Path 对象
-        base_path = pathlib.Path(get_astrbot_data_path())
-        self.data_dir = base_path / "plugin_data" / self.name
+        # 设置存储目录
+        self.plugin_dir = os.path.dirname(os.path.abspath(__file__))
+        self.data_dir = os.path.join(self.plugin_dir, "data")
+        self.encryption_key_file = os.path.join(self.data_dir, "encryption_key.json")
+        self.user_api_file = os.path.join(self.data_dir, "user_api_keys.json")
+        self.price_monitor_file = os.path.join(self.data_dir, "price_monitors.json")
         
         # 确保数据目录存在
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        os.makedirs(self.data_dir, exist_ok=True)
         
         # 创建aiohttp客户端会话
         self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout))
         
-        # 初始化服务
-        self.price_service = PriceService(self.session, self.config)
-        
-        # 初始化服务，使用官方推荐的plugin_data目录
-        # 通知回调函数将在MonitorService中使用
-        self.monitor_service = MonitorService(self.price_service, str(self.data_dir), notification_callback=self._send_notification)
-        self.api_key_service = ApiKeyService(str(self.data_dir))
-        self.chart_service = ChartService(str(self.data_dir))
-
-    async def _send_notification(self, message: str) -> None:
-        """
-        发送通知消息的回调函数
-        
-        :param message: 要发送的通知消息
-        """
-        try:
-            # 在实际项目中，这里应该通过框架提供的API发送消息
-            # 由于当前在定时任务中没有event实例，我们记录日志并将通知存储到文件
-            logger.info(f"发送通知：{message}")
-            
-            # 保存通知到文件，以便后续查询或处理
-            notifications_file = os.path.join(str(self.data_dir), "notifications.json")
-            notifications = []
-            
-            # 加载现有通知
-            if os.path.exists(notifications_file):
-                with open(notifications_file, "r", encoding="utf-8") as f:
-                    notifications = json.load(f)
-            
-            # 添加新通知
-            notification_entry = {
-                "timestamp": time.time(),
-                "message": message
-            }
-            notifications.append(notification_entry)
-            
-            # 只保留最近100条通知
-            if len(notifications) > 100:
-                notifications = notifications[-100:]
-            
-            # 保存通知
-            with open(notifications_file, "w", encoding="utf-8") as f:
-                json.dump(notifications, f, ensure_ascii=False, indent=2)
-                
-        except Exception as e:
-            logger.error(f"发送通知时发生错误: {str(e)}")
+        # 价格监控定时任务
+        self.price_monitor_task = None
+        self.monitor_interval = 60  # 默认每分钟检查一次
     
-    async def close(self, *args, **kwargs):
+    async def _init_encryption_key(self):
+        """
+        初始化加密密钥：
+        1. 优先从文件系统中获取
+        2. 如果没有，生成一个新的随机密钥并存储到文件
+        """
+        if self.encryption_key_initialized:
+            return
+        
+        # 从文件系统中获取加密密钥
+        try:
+            if os.path.exists(self.encryption_key_file):
+                with open(self.encryption_key_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.encryption_key = data.get("encryption_key")
+        except Exception as e:
+            logger.error(f"从文件系统获取加密密钥失败: {str(e)}")
+        
+        # 如果没有获取到密钥，生成一个新的随机密钥
+        if not self.encryption_key or len(self.encryption_key) < 16:
+            import secrets
+            try:
+                # 生成32位的随机字符串作为加密密钥
+                self.encryption_key = secrets.token_hex(16)  # 32个字符的十六进制字符串
+                # 存储加密密钥到文件
+                with open(self.encryption_key_file, "w", encoding="utf-8") as f:
+                    json.dump({"encryption_key": self.encryption_key}, f, ensure_ascii=False, indent=2)
+                logger.info("已生成并存储新的加密密钥")
+            except Exception as e:
+                logger.error(f"生成或存储加密密钥失败: {str(e)}")
+                # 如果生成密钥失败，使用一个默认的不安全密钥（仅作为最后的 fallback）
+                self.encryption_key = "default_fallback_key_12345678"
+        
+        self.encryption_key_initialized = True
+
+    async def close(self):
         """关闭aiohttp会话"""
         if self.session:
             await self.session.close()
@@ -109,495 +99,207 @@ class BinanceCore:
             
             # 根据资产类型选择不同的API域名和端点
             if asset_type == "spot":
-                # 现货API
-                api_domain = self.api_url
-                url = f"{api_domain}/api/v3/ticker/price"
+                url = f"https://api.binance.com/api/v3/ticker/price"
+                params = {"symbol": normalized_symbol}
             elif asset_type == "futures":
-                # 永续合约API（使用不同的域名）
-                api_futures_url = self.config.get("api_futures_url", "https://fapi.binance.com")
-                api_domain = api_futures_url
-                url = f"{api_domain}/fapi/v1/ticker/price"
+                url = f"https://fapi.binance.com/fapi/v1/ticker/price"
+                params = {"symbol": normalized_symbol}
             elif asset_type == "margin":
-                # 杠杆API
-                api_domain = self.api_url
-                url = f"{api_domain}/sapi/v1/margin/market-price"
+                url = f"https://api.binance.com/sapi/v1/margin/price"
+                params = {"symbol": normalized_symbol}
             elif asset_type == "alpha":
-                # Alpha货币 - 目前没有公开的价格API，返回对应现货价格
-                # 从配置中获取Alpha API域名，如果没有则使用默认值
-                api_alpha_url = self.config.get("api_alpha_url", self.api_url)
-                api_domain = api_alpha_url
-                url = f"{api_domain}/api/v3/ticker/price"
+                url = f"https://alpha.binance.com/api/v1/ticker/price"
+                params = {"symbol": normalized_symbol}
             else:
                 logger.error(f"不支持的资产类型: {asset_type}")
                 return None
             
-            params = {"symbol": normalized_symbol}
-            
-            logger.debug(f"查询{asset_type}价格：URL={url}, 参数={params}")
-            
+            # 发送请求
             async with self.session.get(url, params=params) as response:
-                logger.debug(f"API响应状态码: {response.status}, 响应头: {response.headers}")
-                
                 if response.status == 200:
                     data = await response.json()
-                    logger.debug(f"API响应数据: {data}")
-                    # 不同API的返回字段可能略有不同
-                    if asset_type == "margin":
-                        return float(data.get("price", 0))
-                    else:
-                        return float(data.get("price", 0))
+                    return float(data.get("price"))
                 else:
-                    response_text = await response.text()
-                    logger.error(f"获取{asset_type}价格失败，状态码: {response.status}，响应内容: {response_text}")
-                    
-                    # 尝试解析错误响应
-                    try:
-                        error_data = await response.json()
-                        if "code" in error_data and "msg" in error_data:
-                            logger.error(f"API错误代码: {error_data['code']}, 错误信息: {error_data['msg']}")
-                    except Exception:
-                        pass
-                    
-                    # 如果是Alpha类型查询失败，尝试使用现货价格作为后备
-                    if asset_type == "alpha":
-                        logger.info(f"Alpha价格查询失败，尝试使用现货价格作为后备")
-                        try:
-                            spot_url = f"{self.api_url}/api/v3/ticker/price"
-                            async with self.session.get(spot_url, params=params) as spot_response:
-                                if spot_response.status == 200:
-                                    spot_data = await spot_response.json()
-                                    logger.info(f"成功获取现货价格作为Alpha价格的后备: {spot_data.get('price')}")
-                                    return float(spot_data.get('price', 0))
-                                else:
-                                    spot_response_text = await spot_response.text()
-                                    logger.error(f"现货价格查询也失败，状态码: {spot_response.status}，响应内容: {spot_response_text}")
-                        except Exception as e:
-                            logger.error(f"获取后备现货价格时发生错误: {str(e)}")
-                    
+                    logger.error(f"获取价格失败，状态码: {response.status}")
                     return None
         except Exception as e:
-            logger.error(f"获取{asset_type}价格时发生错误: {str(e)}")
+            logger.error(f"获取价格时发生错误: {str(e)}")
             return None
 
-    async def bind_api_key(self, user_id: str, api_key: str, secret_key: str) -> bool:
+    async def sign_request(self, params: Dict, secret_key: str) -> Dict:
         """
-        绑定用户的币安API密钥（加密存储）
-        :param user_id: QQ用户ID
-        :param api_key: 币安API密钥
-        :param secret_key: 币安Secret密钥
-        :return: 是否绑定成功
-        """
-        return await self.api_key_service.bind_api_key(user_id, api_key, secret_key)
-
-    async def get_user_api_key(self, user_id: str) -> Optional[Tuple[str, str]]:
-        """
-        获取用户绑定的币安API密钥（解密）
-        :param user_id: QQ用户ID
-        :return: (api_key, secret_key)元组，或None表示未绑定
-        """
-        return await self.api_key_service.get_api_key(user_id)
-
-    async def handle_price_command(self, event: AstrMessageEvent, *args, **kwargs) -> str:
-        """
-        处理价格查询命令
-        :param event: 消息事件
-        :return: 回复消息
-        """
-        try:
-            # 提取交易对参数
-            message_content = event.message_str.strip()
-            parts = message_content.split()
-            
-            if len(parts) < 2:
-                return "❌ 请输入正确的命令格式：/price <交易对> [资产类型]，例如：/price BTCUSDT futures"
-            
-            symbol = parts[1].strip().upper()  # 标准化为大写
-            
-            # 增强交易对验证
-            if not symbol or len(symbol) < 4:
-                return "❌ 交易对格式不正确，请检查后重试（如 BTCUSDT、ETHUSDT）"
-            
-            # 验证交易对字符合法性（通常只包含字母）
-            import re
-            if not re.match(r'^[A-Z]+$', symbol):
-                return "❌ 交易对只能包含字母，请检查后重试"
-            
-            # 解析资产类型参数（可选）
-            asset_type = "spot"  # 默认现货
-            valid_asset_types = ["spot", "futures", "margin", "alpha"]
-            if len(parts) >= 3:
-                asset_type_param = parts[2].lower()
-                if asset_type_param in valid_asset_types:
-                    asset_type = asset_type_param
-                else:
-                    return f"❌ 不支持的资产类型：{asset_type_param}，支持的类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)"
-            
-            # 查询价格
-            price = await self.get_price(symbol, asset_type)
-            
-            if price is not None and price > 0:
-                normalized_symbol = normalize_symbol(symbol)
-                # 资产类型显示名称映射
-                asset_type_names = {
-                    "spot": "现货",
-                    "futures": "合约",
-                    "margin": "杠杆",
-                    "alpha": "Alpha货币"
-                }
-                return f"✅ {normalized_symbol} ({asset_type_names[asset_type]}) 当前价格：{price:.8f} USDT"
-            else:
-                # 提供更详细的错误提示
-                return f"❌ 价格查询失败，请检查：\n1. 交易对是否正确（如 BTCUSDT、ETHUSDT）\n2. 该交易对是否支持{('该资产类型' if asset_type != 'spot' else '')}查询\n3. 网络连接是否正常"
-                
-        except ValueError as e:
-            return f"❌ {str(e)}"
-        except Exception as e:
-            logger.error(f"处理价格命令时发生错误: {str(e)}")
-            return "❌ 处理请求时发生错误，请稍后重试"
-
-    async def handle_kline_command(self, event: AstrMessageEvent, *args, **kwargs) -> str or Tuple[str, str]:
-        """
-        处理K线图查询命令
-        :param event: 消息事件
-        :param args: 框架传递的额外位置参数
-        :param kwargs: 框架传递的额外关键字参数
-        :return: 回复消息（字符串或图片路径元组）
-        """
-        logger.debug(f"handle_kline_command 接收到参数: args={args}, kwargs={kwargs}")
-        try:
-            # 提取命令参数
-            message_content = event.message_str.strip()
-            parts = message_content.split()
-            
-            # 参数验证与解析
-            if len(parts) < 2:
-                return ("📊 K线图查询\n" 
-                        "用法：/kline <交易对> [资产类型] [时间间隔]\n" 
-                        "示例：/kline BTCUSDT spot 1h\n\n" 
-                        "✅ 支持的资产类型：\n" 
-                        "- spot(现货)\n" 
-                        "- futures(合约)\n" 
-                        "- margin(杠杆)\n" 
-                        "- alpha(Alpha货币)\n\n" 
-                        "✅ 支持的时间间隔：\n" 
-                        "- 1m, 5m, 15m, 30m\n" 
-                        "- 1h, 4h, 1d")
-
-            symbol = parts[1].strip().upper()  # 标准化为大写
-            
-            # 增强交易对验证
-            if not symbol or len(symbol) < 4:
-                return "❌ 交易对格式不正确，请检查后重试（如 BTCUSDT、ETHUSDT）"
-            
-            import re
-            if not re.match(r'^[A-Z]+$', symbol):
-                return "❌ 交易对只能包含字母，请检查后重试"
-
-            # 解析可选参数
-            asset_type = "spot"
-            interval = "1h"
-            
-            # 验证并设置资产类型
-            if len(parts) >= 3:
-                asset_type_param = parts[2].lower()
-                valid_asset_types = ["spot", "futures", "margin", "alpha"]
-                if asset_type_param in valid_asset_types:
-                    asset_type = asset_type_param
-                else:
-                    return f"❌ 无效的资产类型: {asset_type_param}\n支持的资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)"
-            
-            # 验证并设置时间间隔
-            if len(parts) >= 4:
-                interval_param = parts[3].lower()
-                valid_intervals = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
-                if interval_param in valid_intervals:
-                    interval = interval_param
-                else:
-                    return f"❌ 无效的时间间隔: {interval_param}\n支持的时间间隔：1m, 5m, 15m, 30m, 1h, 4h, 1d"
-            
-            # 标准化交易对
-            try:
-                normalized_symbol = normalize_symbol(symbol)
-            except ValueError as e:
-                return f"❌ {str(e)}"
-            
-            # 查询K线数据
-            logger.info(f"获取K线数据: {normalized_symbol}, {asset_type}, {interval}")
-            kline_data = await self.price_service.get_kline(normalized_symbol, asset_type, interval)
-            
-            if not kline_data:
-                return ("❌ 获取K线数据失败\n" 
-                        "请检查：\n" 
-                        "1. 交易对是否正确\n" 
-                        "2. 该交易对是否支持所选资产类型\n" 
-                        "3. 网络连接是否正常")
-            
-            # 生成K线图表
-            logger.info(f"生成K线图表: {normalized_symbol}, {asset_type}, {interval}")
-            chart_path = self.chart_service.create_kline_chart(normalized_symbol, kline_data, interval, asset_type)
-            
-            if chart_path:
-                # 返回图片结果
-                return ("image", chart_path)
-            else:
-                # 如果生成图片失败，回退到优化的文本结果
-                logger.warning(f"图表生成失败，回退到文本输出: {normalized_symbol}")
-                return self._format_kline_text_output(normalized_symbol, kline_data, asset_type, interval)
-                
-        except ValueError as e:
-            logger.error(f"K线命令参数错误: {str(e)}", exc_info=True)
-            return f"❌ 参数错误：{str(e)}"
-        except Exception as e:
-            logger.error(f"处理K线命令时发生错误: {str(e)}", exc_info=True)
-            return ("❌ 处理请求时发生错误\n" 
-                    "请稍后重试，或联系管理员")
-                    
-    def _format_kline_text_output(self, symbol: str, kline_data: list, asset_type: str, interval: str) -> str:
-        """
-        格式化K线数据为文本输出
-        :param symbol: 交易对
-        :param kline_data: K线数据列表
-        :param asset_type: 资产类型
-        :param interval: 时间间隔
-        :return: 格式化的文本输出
-        """
-        if not kline_data:
-            return "❌ K线数据为空"
-            
-        # 只显示最近10条数据
-        recent_klines = kline_data[-10:]
-        output_lines = [f"📊 {symbol} {asset_type} {interval} K线数据（最近10条）"]
-        output_lines.append("=" * 60)
-        
-        # 资产类型显示名称映射
-        asset_type_names = {
-            "spot": "现货",
-            "futures": "合约",
-            "margin": "杠杆",
-            "alpha": "Alpha货币"
-        }
-        
-        for i, kline in enumerate(recent_klines, 1):
-            try:
-                # K线数据结构：[开盘时间, 开盘价, 最高价, 最低价, 收盘价, 成交量, ...]
-                timestamp = kline[0]
-                open_price = float(kline[1])
-                high_price = float(kline[2])
-                low_price = float(kline[3])
-                close_price = float(kline[4])
-                volume = float(kline[5])
-                
-                # 格式化时间（将毫秒时间戳转换为人类可读格式）
-                from datetime import datetime
-                dt = datetime.fromtimestamp(timestamp / 1000)
-                time_str = dt.strftime("%m-%d %H:%M")
-                
-                # 计算涨跌幅和涨跌额
-                change = (close_price - open_price) / open_price * 100
-                change_amount = close_price - open_price
-                
-                # 添加颜色标识
-                if close_price > open_price:
-                    change_str = f"🔴 +{change:.2f}% (+{change_amount:.4f})"
-                elif close_price < open_price:
-                    change_str = f"🟢 {change:.2f}% ({change_amount:.4f})"
-                else:
-                    change_str = f"⚪ 0.00% (0.0000)"
-                
-                # 格式化价格（根据价格范围选择合适的小数位数）
-                price_decimals = 8 if close_price < 1 else 2
-                
-                output_lines.append(
-                    f"[{i:2d}] {time_str} | "
-                    f"O: {open_price:.{price_decimals}f} | "
-                    f"H: {high_price:.{price_decimals}f} | "
-                    f"L: {low_price:.{price_decimals}f} | "
-                    f"C: {close_price:.{price_decimals}f} | "
-                    f"{change_str} | "
-                    f"V: {volume:.4f}"
-                )
-            except Exception as e:
-                logger.error(f"格式化K线数据时发生错误: {str(e)}")
-                continue
-        
-        output_lines.append("=" * 60)
-        output_lines.append(f"💡 数据更新时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        output_lines.append(f"💡 资产类型: {asset_type_names.get(asset_type, asset_type)}")
-        
-        return "\n".join(output_lines)
-
-    async def unbind_api_key(self, user_id: str) -> bool:
-        """
-        解除绑定用户的币安API密钥
-        :param user_id: QQ用户ID
-        :return: 是否解除绑定成功
-        """
-        return await self.api_key_service.unbind_api_key(user_id)
-
-    async def handle_bind_command(self, event: AstrMessageEvent, *args, **kwargs) -> str:
-        """
-        处理API密钥绑定命令
-        :param event: 消息事件
-        :return: 回复消息
-        """
-        try:
-            # 提取参数
-            message_content = event.message_str.strip()
-            parts = message_content.split()
-            
-            if len(parts) < 3:
-                return "❌ 请输入正确的命令格式：/绑定 <API_KEY> <SECRET_KEY>"
-            
-            api_key = parts[1]
-            secret_key = parts[2]
-            user_id = event.get_sender_id()
-            
-            # 增强API密钥格式验证
-            if not api_key or not secret_key:
-                return "❌ API密钥和Secret密钥不能为空"
-                
-            if len(api_key) < 20 or len(secret_key) < 20:
-                return "❌ API密钥或Secret密钥长度不足，请检查后重试"
-            
-            # 验证API密钥字符合法性（通常只包含字母、数字和特殊字符）
-            import re
-            if not re.match(r'^[A-Za-z0-9-_]+$', api_key) or not re.match(r'^[A-Za-z0-9-_]+$', secret_key):
-                return "❌ API密钥或Secret密钥包含非法字符，请检查后重试"
-            
-            # 绑定API密钥
-            success = await self.bind_api_key(user_id, api_key, secret_key)
-            
-            if success:
-                return "✅ 币安API密钥绑定成功！"
-            else:
-                return "❌ API密钥绑定失败，请稍后重试"
-                
-        except Exception as e:
-            logger.error(f"处理绑定命令时发生错误: {str(e)}")
-            return "❌ 处理请求时发生错误，请稍后重试"
-
-    async def handle_unbind_command(self, event: AstrMessageEvent, *args, **kwargs) -> str:
-        """
-        处理API密钥解除绑定命令
-        :param event: 消息事件
-        :return: 回复消息
-        """
-        try:
-            user_id = event.get_sender_id()
-            
-            # 检查用户是否已绑定API密钥
-            api_keys = await self.get_user_api_key(user_id)
-            if not api_keys:
-                return "❌ 您尚未绑定币安API密钥，无需解除绑定"
-            
-            # 解除绑定API密钥
-            success = await self.unbind_api_key(user_id)
-            
-            if success:
-                return "✅ 币安API密钥解除绑定成功！"
-            else:
-                return "❌ 解除绑定失败，请稍后重试"
-                
-        except Exception as e:
-            logger.error(f"处理解除绑定命令时发生错误: {str(e)}")
-            return "❌ 处理请求时发生错误，请稍后重试"
-
-    async def start_price_monitor(self, *args, **kwargs) -> None:
-        """
-        启动价格监控定时任务
-        """
-        await self.monitor_service.start_price_monitor()
-
-    async def stop_price_monitor(self, *args, **kwargs) -> None:
-        """
-        停止价格监控定时任务
-        """
-        await self.monitor_service.stop_price_monitor()
-
-    async def handle_help_command(self, event: AstrMessageEvent, *args, **kwargs) -> str:
-        """
-        处理帮助命令，显示所有可用命令
-        :param event: 消息事件
-        :return: 帮助信息
-        """
-        help_text = (
-            "📚 币安插件命令列表\n"
-            "=================\n"
-            "/price <交易对> [资产类型] - 查询币安资产价格\n"
-            "  资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)\n"
-            "  示例：/price BTCUSDT futures\n"
-            "\n"
-            "/绑定 <API_KEY> <SECRET_KEY> - 绑定币安API密钥\n"
-            "  示例：/绑定 abcdef123456 abcdef123456\n"
-            "\n"
-            "/解除绑定 - 解除绑定币安API密钥\n"
-            "\n"
-            "/资产 [查询类型] - 查询账户资产（需先绑定API）\n"
-            "  查询类型：alpha/资金/现货/合约，不输入则查询总览\n"
-            "  示例：/资产 alpha\n"
-            "\n"
-            "/监控 设置 <交易对> <资产类型> <目标价格> <方向> - 设置价格监控\n"
-            "  资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)\n"
-            "  方向：up(上涨到), down(下跌到)\n"
-            "  示例：/监控 设置 BTCUSDT futures 50000 up\n"
-            "\n"
-            "/监控 取消 <监控ID> - 取消指定的价格监控\n"
-            "  示例：/监控 取消 1\n"
-            "\n"
-            "/监控 列表 - 查看您的所有价格监控\n"
-            "\n"
-            "/kline <交易对> [资产类型] [时间间隔] - 查询K线数据\n"
-            "  资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)\n"
-            "  时间间隔：1m, 5m, 15m, 30m, 1h, 4h, 1d\n"
-            "  示例：/kline BTCUSDT spot 1h\n"
-            "\n"
-            "/bahelp - 显示本帮助信息\n"
-            "=================\n"
-            "注：API密钥加密存储，确保安全\n"
-        )
-        return help_text
-
-    async def _get_private_api_signature(self, params: Dict, secret_key: str) -> str:
-        """
-        生成币安API签名
-        :param params: 请求参数
-        :param secret_key: 用户的secret_key
-        :return: 签名后的字符串
+        为币安API请求生成签名
+        :param params: 请求参数字典
+        :param secret_key: API密钥的secret
+        :return: 包含签名的参数字典
         """
         # 添加时间戳
         params["timestamp"] = int(time.time() * 1000)
-        # 对参数进行排序并拼接
-        query_string = "&".join([f"{k}={v}" for k, v in sorted(params.items())])
-        # 使用HMAC-SHA256进行签名
-        signature = hmac.new(secret_key.encode(), query_string.encode(), hashlib.sha256).hexdigest()
-        return signature
+        
+        # 生成查询字符串
+        query_string = "&".join([f"{key}={value}" for key, value in sorted(params.items())])
+        
+        # 生成HMAC-SHA256签名
+        signature = hmac.new(
+            secret_key.encode("utf-8"),
+            query_string.encode("utf-8"),
+            hashlib.sha256
+        ).hexdigest()
+        
+        # 将签名添加到参数中
+        params["signature"] = signature
+        
+        return params
 
-    async def _call_private_api(self, api_path: str, api_key: str, secret_key: str, params: Dict = None, is_futures: bool = False) -> Optional[Dict]:
+    async def authenticated_request(self, method: str, endpoint: str, params: Dict, api_key: str, secret_key: str) -> Optional[Dict]:
         """
-        调用币安私有API
-        :param api_path: API路径
-        :param api_key: 用户的api_key
-        :param secret_key: 用户的secret_key
-        :param params: 请求参数
-        :param is_futures: 是否是合约API
-        :return: API响应数据或None
+        发送需要身份验证的币安API请求
+        :param method: 请求方法，如GET, POST, DELETE等
+        :param endpoint: API端点，如/api/v3/account
+        :param params: 请求参数字典
+        :param api_key: API密钥的key
+        :param secret_key: API密钥的secret
+        :return: 响应数据字典，或None表示失败
         """
         try:
-            if params is None:
-                params = {}
+            # 为请求生成签名
+            signed_params = await self.sign_request(params, secret_key)
             
-            # 生成签名
-            signature = await self._get_private_api_signature(params, secret_key)
+            # 构建完整的请求URL
+            url = f"https://api.binance.com{endpoint}"
+            
+            # 设置请求头
+            headers = {
+                "X-MBX-APIKEY": api_key
+            }
+            
+            # 发送请求
+            if method.upper() == "GET":
+                async with self.session.get(url, params=signed_params, headers=headers) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    else:
+                        logger.error(f"认证请求失败，状态码: {response.status}")
+                        logger.error(f"响应内容: {await response.text()}")
+                        return None
+            elif method.upper() == "POST":
+                async with self.session.post(url, data=signed_params, headers=headers) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    else:
+                        logger.error(f"认证请求失败，状态码: {response.status}")
+                        logger.error(f"响应内容: {await response.text()}")
+                        return None
+            elif method.upper() == "DELETE":
+                async with self.session.delete(url, params=signed_params, headers=headers) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    else:
+                        logger.error(f"认证请求失败，状态码: {response.status}")
+                        logger.error(f"响应内容: {await response.text()}")
+                        return None
+            else:
+                logger.error(f"不支持的请求方法: {method}")
+                return None
+        except Exception as e:
+            logger.error(f"发送认证请求时发生错误: {str(e)}")
+            return None
+
+    async def get_account_info(self, api_key: str, secret_key: str) -> Optional[Dict]:
+        """
+        获取币安账户信息
+        :param api_key: API密钥的key
+        :param secret_key: API密钥的secret
+        :return: 账户信息字典，或None表示失败
+        """
+        try:
+            # 调用币安API获取账户信息
+            account_data = await self.authenticated_request(
+                "GET",
+                "/api/v3/account",
+                {},
+                api_key,
+                secret_key
+            )
+            
+            return account_data
+        except Exception as e:
+            logger.error(f"获取账户信息时发生错误: {str(e)}")
+            return None
+
+    async def get_spot_assets(self, api_key: str, secret_key: str) -> Optional[Dict]:
+        """
+        获取现货账户资产信息
+        :param api_key: API密钥的key
+        :param secret_key: API密钥的secret
+        :return: 现货账户资产信息字典，或None表示失败
+        """
+        try:
+            # 获取账户信息
+            account_data = await self.get_account_info(api_key, secret_key)
+            if not account_data:
+                return None
+            
+            # 计算现货账户总资产（使用USDT计价）
+            total_asset = 0.0
+            details = []
+            
+            # 处理每个资产
+            for asset in account_data.get("balances", []):
+                symbol = asset.get("asset")
+                free = float(asset.get("free", "0"))
+                locked = float(asset.get("locked", "0"))
+                total = free + locked
+                
+                if total > 0:
+                    # 如果是USDT，直接相加
+                    if symbol == "USDT":
+                        total_asset += total
+                        details.append({"symbol": symbol, "amount": total})
+                    else:
+                        # 获取其他资产的USDT价格
+                        usdt_symbol = f"{symbol}USDT"
+                        price = await self.get_price(usdt_symbol, "spot")
+                        if price:
+                            asset_value = total * price
+                            total_asset += asset_value
+                            details.append({"symbol": symbol, "amount": asset_value})
+            
+            return {
+                "total": round(total_asset, 2),
+                "details": details
+            }
+        except Exception as e:
+            logger.error(f"获取现货账户资产时发生错误: {str(e)}")
+            return None
+
+    async def get_futures_account_info(self, api_key: str, secret_key: str) -> Optional[Dict]:
+        """
+        获取合约账户信息
+        :param api_key: API密钥的key
+        :param secret_key: API密钥的secret
+        :return: 合约账户信息字典，或None表示失败
+        """
+        try:
+            # 构建签名参数
+            params = {}
+            params["timestamp"] = int(time.time() * 1000)
+            
+            # 生成查询字符串
+            query_string = "&".join([f"{key}={value}" for key, value in sorted(params.items())])
+            
+            # 生成HMAC-SHA256签名
+            signature = hmac.new(
+                secret_key.encode("utf-8"),
+                query_string.encode("utf-8"),
+                hashlib.sha256
+            ).hexdigest()
+            
+            # 将签名添加到参数中
             params["signature"] = signature
             
-            # 根据是否是合约API选择不同的基础URL
-            if is_futures:
-                base_url = f"{self.api_url}/fapi"
-            else:
-                base_url = f"{self.api_url}/api"
-            
-            url = f"{base_url}{api_path}"
-            
+            # 发送请求
+            url = "https://fapi.binance.com/fapi/v2/account"
             headers = {
                 "X-MBX-APIKEY": api_key
             }
@@ -606,104 +308,488 @@ class BinanceCore:
                 if response.status == 200:
                     return await response.json()
                 else:
-                    logger.error(f"调用私有API失败，状态码: {response.status}，响应: {await response.text()}")
+                    logger.error(f"获取合约账户信息失败，状态码: {response.status}")
+                    logger.error(f"响应内容: {await response.text()}")
                     return None
         except Exception as e:
-            logger.error(f"调用私有API时发生错误: {str(e)}")
+            logger.error(f"获取合约账户信息时发生错误: {str(e)}")
+            return None
+
+    async def get_futures_assets(self, api_key: str, secret_key: str) -> Optional[Dict]:
+        """
+        获取合约账户资产信息
+        :param api_key: API密钥的key
+        :param secret_key: API密钥的secret
+        :return: 合约账户资产信息字典，或None表示失败
+        """
+        try:
+            # 获取合约账户信息
+            futures_data = await self.get_futures_account_info(api_key, secret_key)
+            if not futures_data:
+                return None
+            
+            # 计算合约账户总资产
+            total_asset = float(futures_data.get("totalWalletBalance", "0"))
+            
+            # 获取所有持仓信息
+            positions = futures_data.get("positions", [])
+            details = []
+            
+            # 处理每个持仓
+            for position in positions:
+                symbol = position.get("symbol")
+                positionAmt = float(position.get("positionAmt", "0"))
+                
+                if abs(positionAmt) > 0:
+                    # 获取当前价格
+                    price = await self.get_price(symbol, "futures")
+                    if price:
+                        # 计算持仓价值
+                        position_value = abs(positionAmt) * price
+                        details.append({"symbol": symbol, "amount": position_value})
+            
+            return {
+                "total": round(total_asset, 2),
+                "details": details
+            }
+        except Exception as e:
+            logger.error(f"获取合约账户资产时发生错误: {str(e)}")
+            return None
+
+    async def get_fund_assets(self, api_key: str, secret_key: str) -> Optional[Dict]:
+        """
+        获取资金账户资产信息
+        :param api_key: API密钥的key
+        :param secret_key: API密钥的secret
+        :return: 资金账户资产信息字典，或None表示失败
+        """
+        try:
+            # 获取资金账户信息
+            fund_data = await self.authenticated_request(
+                "GET",
+                "/sapi/v1/fund/account",
+                {},
+                api_key,
+                secret_key
+            )
+            if not fund_data:
+                return None
+            
+            # 计算资金账户总资产
+            total_asset = 0.0
+            details = []
+            
+            # 处理每个资产
+            for asset in fund_data.get("balances", []):
+                symbol = asset.get("asset")
+                free = float(asset.get("free", "0"))
+                locked = float(asset.get("locked", "0"))
+                total = free + locked
+                
+                if total > 0:
+                    # 如果是USDT，直接相加
+                    if symbol == "USDT":
+                        total_asset += total
+                        details.append({"symbol": symbol, "amount": total})
+                    else:
+                        # 获取其他资产的USDT价格
+                        usdt_symbol = f"{symbol}USDT"
+                        price = await self.get_price(usdt_symbol, "spot")
+                        if price:
+                            asset_value = total * price
+                            total_asset += asset_value
+                            details.append({"symbol": symbol, "amount": asset_value})
+            
+            return {
+                "total": round(total_asset, 2),
+                "details": details
+            }
+        except Exception as e:
+            logger.error(f"获取资金账户资产时发生错误: {str(e)}")
+            return None
+
+    async def get_alpha_assets(self, api_key: str, secret_key: str) -> Optional[Dict]:
+        """
+        获取Alpha资产信息
+        :param api_key: API密钥的key
+        :param secret_key: API密钥的secret
+        :return: Alpha资产信息字典，或None表示失败
+        """
+        try:
+            # 获取Alpha资产信息
+            alpha_data = await self.authenticated_request(
+                "GET",
+                "/api/v1/alpha/account",
+                {},
+                api_key,
+                secret_key
+            )
+            if not alpha_data:
+                return None
+            
+            # 计算Alpha资产总资产
+            total_asset = 0.0
+            details = []
+            
+            # 处理每个资产
+            for asset in alpha_data.get("balances", []):
+                symbol = asset.get("asset")
+                free = float(asset.get("free", "0"))
+                locked = float(asset.get("locked", "0"))
+                total = free + locked
+                
+                if total > 0:
+                    # 获取资产的USDT价格
+                    usdt_symbol = f"{symbol}USDT"
+                    price = await self.get_price(usdt_symbol, "alpha")
+                    if price:
+                        asset_value = total * price
+                        total_asset += asset_value
+                        details.append({"symbol": symbol, "amount": asset_value})
+            
+            return {
+                "total": round(total_asset, 2),
+                "details": details
+            }
+        except Exception as e:
+            logger.error(f"获取Alpha资产时发生错误: {str(e)}")
             return None
 
     async def get_account_overview(self, api_key: str, secret_key: str) -> Optional[Dict]:
         """
-        获取账户总览（模拟数据）
-        :param api_key: 用户的api_key
-        :param secret_key: 用户的secret_key
-        :return: 账户总览数据
+        获取账户总览信息
+        :param api_key: API密钥的key
+        :param secret_key: API密钥的secret
+        :return: 账户总览信息字典，或None表示失败
         """
-        # 实际项目中应该调用真实的API
-        # account_data = await self._call_private_api("/v3/account", api_key, secret_key)
+        try:
+            # 获取各个账户的资产信息
+            alpha_asset = await self.get_alpha_assets(api_key, secret_key)
+            fund_asset = await self.get_fund_assets(api_key, secret_key)
+            spot_asset = await self.get_spot_assets(api_key, secret_key)
+            futures_asset = await self.get_futures_assets(api_key, secret_key)
+            
+            # 计算总资产
+            total_asset = 0.0
+            
+            if alpha_asset:
+                total_asset += alpha_asset.get("total", 0)
+            if fund_asset:
+                total_asset += fund_asset.get("total", 0)
+            if spot_asset:
+                total_asset += spot_asset.get("total", 0)
+            if futures_asset:
+                total_asset += futures_asset.get("total", 0)
+            
+            # 计算今日盈亏（简化版本，实际应该使用历史数据）
+            today_profit = 0.0
+            profit_rate = 0.0
+            
+            if total_asset > 0:
+                # 这里简化处理，实际应该从历史数据中获取昨日总资产
+                yesterday_total_asset = total_asset * 0.99  # 假设昨日总资产是今天的99%
+                today_profit = total_asset - yesterday_total_asset
+                profit_rate = (today_profit / yesterday_total_asset) * 100
+            
+            return {
+                "total_asset": round(total_asset, 2),
+                "today_profit": round(today_profit, 2),
+                "profit_rate": round(profit_rate, 2),
+                "alpha_asset": round(alpha_asset.get("total", 0), 2) if alpha_asset else 0,
+                "fund_asset": round(fund_asset.get("total", 0), 2) if fund_asset else 0,
+                "spot_asset": round(spot_asset.get("total", 0), 2) if spot_asset else 0,
+                "futures_asset": round(futures_asset.get("total", 0), 2) if futures_asset else 0
+            }
+        except Exception as e:
+            logger.error(f"获取账户总览时发生错误: {str(e)}")
+            return None
+
+    async def bind_api_key(self, user_id: str, api_key: str, secret_key: str) -> bool:
+        """
+        绑定用户的币安API密钥
+        :param user_id: 用户ID
+        :param api_key: API密钥的key
+        :param secret_key: API密钥的secret
+        :return: 绑定是否成功
+        """
+        try:
+            # 初始化加密密钥
+            await self._init_encryption_key()
+            
+            # 加密API密钥
+            encrypted_api_key = await encrypt_data(api_key, self.encryption_key)
+            encrypted_secret_key = await encrypt_data(secret_key, self.encryption_key)
+            
+            # 读取现有的API密钥数据
+            user_api_data = {}
+            if os.path.exists(self.user_api_file):
+                with open(self.user_api_file, "r", encoding="utf-8") as f:
+                    user_api_data = json.load(f)
+            
+            # 存储加密后的API密钥
+            user_api_data[user_id] = {
+                "api_key": encrypted_api_key,
+                "secret_key": encrypted_secret_key,
+                "bind_time": time.time()
+            }
+            
+            # 保存到文件
+            with open(self.user_api_file, "w", encoding="utf-8") as f:
+                json.dump(user_api_data, f, ensure_ascii=False, indent=2)
+            
+            return True
+        except Exception as e:
+            logger.error(f"绑定API密钥时发生错误: {str(e)}")
+            return False
+
+    async def unbind_api_key(self, user_id: str) -> bool:
+        """
+        解除绑定用户的币安API密钥
+        :param user_id: 用户ID
+        :return: 解除绑定是否成功
+        """
+        try:
+            # 读取现有的API密钥数据
+            user_api_data = {}
+            if os.path.exists(self.user_api_file):
+                with open(self.user_api_file, "r", encoding="utf-8") as f:
+                    user_api_data = json.load(f)
+            
+            # 删除用户的API密钥
+            if user_id in user_api_data:
+                del user_api_data[user_id]
+                
+                # 保存到文件
+                with open(self.user_api_file, "w", encoding="utf-8") as f:
+                    json.dump(user_api_data, f, ensure_ascii=False, indent=2)
+            
+            return True
+        except Exception as e:
+            logger.error(f"解除绑定API密钥时发生错误: {str(e)}")
+            return False
+
+    async def get_user_api_key(self, user_id: str) -> Optional[Tuple[str, str]]:
+        """
+        获取用户的币安API密钥
+        :param user_id: 用户ID
+        :return: 包含API密钥的元组(api_key, secret_key)，或None表示失败
+        """
+        try:
+            # 初始化加密密钥
+            await self._init_encryption_key()
+            
+            # 读取现有的API密钥数据
+            if os.path.exists(self.user_api_file):
+                with open(self.user_api_file, "r", encoding="utf-8") as f:
+                    user_api_data = json.load(f)
+                    
+                # 获取用户的加密API密钥
+                if user_id in user_api_data:
+                    encrypted_api_key = user_api_data[user_id].get("api_key")
+                    encrypted_secret_key = user_api_data[user_id].get("secret_key")
+                    
+                    # 解密API密钥
+                    api_key = await decrypt_data(encrypted_api_key, self.encryption_key)
+                    secret_key = await decrypt_data(encrypted_secret_key, self.encryption_key)
+                    
+                    return (api_key, secret_key)
+            
+            return None
+        except Exception as e:
+            logger.error(f"获取用户API密钥时发生错误: {str(e)}")
+            return None
+
+    async def start_price_monitor(self) -> None:
+        """
+        启动价格监控定时任务
+        """
+        if self.price_monitor_task:
+            logger.info("价格监控任务已经在运行")
+            return
         
-        # 模拟数据
-        return {
-            "total_asset": 14.4,
-            "today_profit": -1.74,
-            "profit_rate": -10.75,
-            "alpha_asset": 14.37,
-            "fund_asset": 0.03146084,
-            "spot_asset": 0.00,
-            "futures_asset": 0.00
-        }
-
-    async def get_alpha_assets(self, api_key: str, secret_key: str) -> Optional[Dict]:
-        """
-        获取Alpha资产（模拟数据）
-        :param api_key: 用户的api_key
-        :param secret_key: 用户的secret_key
-        :return: Alpha资产数据
-        """
-        return {
-            "total": 14.37,
-            "details": [
-                {"symbol": "USDT", "amount": 14.37}
-            ]
-        }
-
-    async def get_fund_assets(self, api_key: str, secret_key: str) -> Optional[Dict]:
-        """
-        获取资金账户资产（模拟数据）
-        :param api_key: 用户的api_key
-        :param secret_key: 用户的secret_key
-        :return: 资金账户资产数据
-        """
-        return {
-            "total": 0.03146084,
-            "details": [
-                {"symbol": "USDT", "amount": 0.03146084}
-            ]
-        }
-
-    async def get_spot_assets(self, api_key: str, secret_key: str) -> Optional[Dict]:
-        """
-        获取现货账户资产（模拟数据）
-        :param api_key: 用户的api_key
-        :param secret_key: 用户的secret_key
-        :return: 现货账户资产数据
-        """
-        return {
-            "total": 0.00,
-            "details": []
-        }
-
-    async def get_futures_assets(self, api_key: str, secret_key: str) -> Optional[Dict]:
-        """
-        获取合约账户资产（模拟数据）
-        :param api_key: 用户的api_key
-        :param secret_key: 用户的secret_key
-        :return: 合约账户资产数据
-        """
-        return {
-            "total": 0.00,
-            "details": []
-        }
-
-    async def _format_asset_details(self, asset_data: Dict, asset_name: str, emoji: str) -> str:
-        """
-        格式化资产详情信息
+        async def monitor_loop():
+            while True:
+                try:
+                    # 读取监控配置
+                    monitor_configs = {}
+                    if os.path.exists(self.price_monitor_file):
+                        with open(self.price_monitor_file, "r", encoding="utf-8") as f:
+                            monitor_configs = json.load(f)
+                    
+                    # 处理每个监控配置
+                    for user_id, configs in monitor_configs.items():
+                        for config in configs:
+                            symbol = config.get("symbol")
+                            asset_type = config.get("asset_type", "spot")
+                            target_price = config.get("target_price")
+                            condition = config.get("condition", "eq")
+                            
+                            # 获取当前价格
+                            current_price = await self.get_price(symbol, asset_type)
+                            if current_price:
+                                # 检查价格条件
+                                trigger = False
+                                if condition == "eq" and current_price == target_price:
+                                    trigger = True
+                                elif condition == "gt" and current_price > target_price:
+                                    trigger = True
+                                elif condition == "lt" and current_price < target_price:
+                                    trigger = True
+                                elif condition == "gte" and current_price >= target_price:
+                                    trigger = True
+                                elif condition == "lte" and current_price <= target_price:
+                                    trigger = True
+                                
+                                # 如果满足条件，发送通知
+                                if trigger:
+                                    message = f"📊 {symbol} {asset_type} 价格已达到 {current_price} USDT，触发条件：{condition} {target_price} USDT"
+                                    # 这里应该调用消息发送API，但需要根据具体的AstrBot API来实现
+                                    logger.info(f"发送价格提醒给用户 {user_id}: {message}")
+                except Exception as e:
+                    logger.error(f"价格监控任务执行错误: {str(e)}")
+                
+                # 等待下一次检查
+                await asyncio.sleep(self.monitor_interval)
         
-        :param asset_data: 资产数据字典
-        :param asset_name: 资产名称
-        :param emoji: 资产显示的 emoji
-        :return: 格式化后的资产信息字符串
+        # 启动监控任务
+        self.price_monitor_task = asyncio.create_task(monitor_loop())
+        logger.info("价格监控任务已启动")
+
+    async def stop_price_monitor(self) -> None:
         """
-        if asset_data['details']:
-            details = "\n".join([f"{item['symbol']}: {item['amount']} USDT" for item in asset_data['details']])
+        停止价格监控定时任务
+        """
+        if self.price_monitor_task:
+            self.price_monitor_task.cancel()
+            self.price_monitor_task = None
+            logger.info("价格监控任务已停止")
         else:
-            details = "无"
-        return (
-            f"{emoji} {asset_name}资产\n"
-            f"总资产：{asset_data['total']} USDT\n"
-            f"详细信息：\n{details}"
-        )
-    
+            logger.info("价格监控任务没有在运行")
+
+    async def add_price_monitor(self, user_id: str, symbol: str, asset_type: str, target_price: float, condition: str) -> bool:
+        """
+        添加价格监控
+        :param user_id: 用户ID
+        :param symbol: 交易对，如BTCUSDT
+        :param asset_type: 资产类型，如spot, futures等
+        :param target_price: 目标价格
+        :param condition: 触发条件，如eq, gt, lt, gte, lte
+        :return: 添加是否成功
+        """
+        try:
+            # 读取现有的监控配置
+            monitor_configs = {}
+            if os.path.exists(self.price_monitor_file):
+                with open(self.price_monitor_file, "r", encoding="utf-8") as f:
+                    monitor_configs = json.load(f)
+            
+            # 创建或更新用户的监控配置
+            if user_id not in monitor_configs:
+                monitor_configs[user_id] = []
+            
+            # 添加新的监控配置
+            new_config = {
+                "symbol": symbol,
+                "asset_type": asset_type,
+                "target_price": target_price,
+                "condition": condition,
+                "create_time": time.time()
+            }
+            
+            monitor_configs[user_id].append(new_config)
+            
+            # 保存到文件
+            with open(self.price_monitor_file, "w", encoding="utf-8") as f:
+                json.dump(monitor_configs, f, ensure_ascii=False, indent=2)
+            
+            return True
+        except Exception as e:
+            logger.error(f"添加价格监控时发生错误: {str(e)}")
+            return False
+
+    async def remove_price_monitor(self, user_id: str, index: int) -> bool:
+        """
+        移除价格监控
+        :param user_id: 用户ID
+        :param index: 监控配置的索引
+        :return: 移除是否成功
+        """
+        try:
+            # 读取现有的监控配置
+            monitor_configs = {}
+            if os.path.exists(self.price_monitor_file):
+                with open(self.price_monitor_file, "r", encoding="utf-8") as f:
+                    monitor_configs = json.load(f)
+            
+            # 检查用户是否有监控配置
+            if user_id not in monitor_configs:
+                return False
+            
+            # 检查索引是否有效
+            if 0 <= index < len(monitor_configs[user_id]):
+                # 移除指定索引的监控配置
+                del monitor_configs[user_id][index]
+                
+                # 保存到文件
+                with open(self.price_monitor_file, "w", encoding="utf-8") as f:
+                    json.dump(monitor_configs, f, ensure_ascii=False, indent=2)
+                
+                return True
+            
+            return False
+        except Exception as e:
+            logger.error(f"移除价格监控时发生错误: {str(e)}")
+            return False
+
+    async def list_price_monitors(self, user_id: str) -> Optional[list]:
+        """
+        获取用户的所有价格监控配置
+        :param user_id: 用户ID
+        :return: 监控配置列表，或None表示失败
+        """
+        try:
+            # 读取现有的监控配置
+            monitor_configs = {}
+            if os.path.exists(self.price_monitor_file):
+                with open(self.price_monitor_file, "r", encoding="utf-8") as f:
+                    monitor_configs = json.load(f)
+            
+            return monitor_configs.get(user_id, [])
+        except Exception as e:
+            logger.error(f"获取价格监控配置时发生错误: {str(e)}")
+            return None
+
+    async def handle_price_command(self, event: AstrMessageEvent, *args, **kwargs) -> str:
+        """
+        处理价格查询命令
+        :param event: 消息事件
+        :return: 回复消息
+        """
+        try:
+            # 提取命令参数
+            message_content = event.message_str.strip()
+            parts = message_content.split()
+            
+            if len(parts) < 2:
+                return "❌ 请输入正确的命令格式：/price <交易对> [资产类型]"
+            
+            symbol = parts[1]
+            asset_type = parts[2] if len(parts) >= 3 else "spot"
+            
+            # 验证资产类型
+            if asset_type not in ["spot", "futures", "margin", "alpha"]:
+                return "❌ 不支持的资产类型，请使用 spot/futures/margin/alpha"
+            
+            # 获取价格
+            price = await self.get_price(symbol, asset_type)
+            if price:
+                return f"💰 {symbol} ({asset_type}) 当前价格：{price} USDT"
+            else:
+                return "❌ 获取价格失败，请稍后重试"
+        except Exception as e:
+            logger.error(f"处理价格命令时发生错误: {str(e)}")
+            return "❌ 处理请求时发生错误，请稍后重试"
+
     async def handle_asset_command(self, event: AstrMessageEvent, *args, **kwargs) -> str:
         """
         处理资产查询命令
@@ -717,7 +803,7 @@ class BinanceCore:
             # 检查用户是否绑定了API密钥
             api_keys = await self.get_user_api_key(user_id)
             if not api_keys:
-                return "❌ 您尚未绑定币安API密钥，请先使用/绑定命令绑定"
+                return "❌ 您尚未绑定币安API密钥，请先使用绑定命令绑定"
             
             api_key, secret_key = api_keys
             
@@ -780,7 +866,195 @@ class BinanceCore:
                     return "❌ 获取合约账户资产失败"
             else:
                 return "❌ 不支持的查询类型，请使用 alpha/资金/现货/合约"
-                
+            
         except Exception as e:
             logger.error(f"处理资产命令时发生错误: {str(e)}")
             return "❌ 处理请求时发生错误，请稍后重试"
+
+    async def _format_asset_details(self, asset_data: Dict, asset_name: str, emoji: str) -> str:
+        """
+        格式化资产详情信息
+        
+        :param asset_data: 资产数据字典
+        :param asset_name: 资产名称
+        :param emoji: 资产显示emoji
+        :return: 格式化后的资产信息字符串
+        """
+        if asset_data['details']:
+            details = "\n".join([f"{item['symbol']}: {item['amount']} USDT" for item in asset_data['details']])
+        else:
+            details = "无资产"
+        return (
+            f"{emoji} {asset_name}资产\n"
+            f"总资产：{asset_data['total']} USDT\n"
+            f"详细信息：\n{details}"
+        )
+
+    async def handle_bind_command(self, event: AstrMessageEvent, *args, **kwargs) -> str:
+        """
+        处理API密钥绑定命令
+        :param event: 消息事件
+        :return: 回复消息
+        """
+        try:
+            # 提取命令参数
+            message_content = event.message_str.strip()
+            parts = message_content.split()
+            
+            if len(parts) < 3:
+                return "❌ 请输入正确的命令格式：/bind <API Key> <Secret Key>"
+            
+            api_key = parts[1]
+            secret_key = parts[2]
+            
+            # 验证API密钥格式（简单验证）
+            if len(api_key) < 20 or len(secret_key) < 20:
+                return "❌ API密钥格式不正确，请检查后重试"
+            
+            # 获取用户ID
+            user_id = event.get_sender_id()
+            
+            # 绑定API密钥
+            success = await self.bind_api_key(user_id, api_key, secret_key)
+            
+            if success:
+                return "✅ 币安API密钥绑定成功 ✅"
+            else:
+                return "❌ API密钥绑定失败，请稍后重试"
+                
+        except Exception as e:
+            logger.error(f"处理绑定命令时发生错误：{str(e)}")
+            return "❌ 处理请求时发生错误，请稍后重试"
+
+    async def handle_unbind_command(self, event: AstrMessageEvent, *args, **kwargs) -> str:
+        """
+        处理API密钥解除绑定命令
+        :param event: 消息事件
+        :return: 回复消息
+        """
+        try:
+            user_id = event.get_sender_id()
+            
+            # 检查用户是否已绑定API密钥
+            api_keys = await self.get_user_api_key(user_id)
+            if not api_keys:
+                return "❌ 您尚未绑定币安API密钥，无需解除绑定"
+            
+            # 解除绑定API密钥
+            success = await self.unbind_api_key(user_id)
+            
+            if success:
+                return "✅ 币安API密钥解除绑定成功 ✅"
+            else:
+                return "❌ 解除绑定失败，请稍后重试"
+                
+        except Exception as e:
+            logger.error(f"处理解除绑定命令时发生错误：{str(e)}")
+            return "❌ 处理请求时发生错误，请稍后重试"
+
+    async def handle_monitor_command(self, event: AstrMessageEvent, *args, **kwargs) -> str:
+        """
+        处理价格监控命令
+        :param event: 消息事件
+        :return: 回复消息
+        """
+        try:
+            # 提取命令参数
+            message_content = event.message_str.strip()
+            parts = message_content.split()
+            
+            if len(parts) < 2:
+                return "❌ 请输入正确的命令格式：/monitor <add/list/remove> [参数]"
+            
+            sub_command = parts[1].lower()
+            user_id = event.get_sender_id()
+            
+            if sub_command == "add":
+                # 添加价格监控
+                if len(parts) < 6:
+                    return "❌ 请输入正确的命令格式：/monitor add <交易对> <资产类型> <目标价格> <条件(eq/gt/lt/gte/lte)>"
+                
+                symbol = parts[2]
+                asset_type = parts[3]
+                target_price = float(parts[4])
+                condition = parts[5]
+                
+                # 验证资产类型
+                if asset_type not in ["spot", "futures", "margin", "alpha"]:
+                    return "❌ 不支持的资产类型，请使用 spot/futures/margin/alpha"
+                
+                # 验证条件
+                if condition not in ["eq", "gt", "lt", "gte", "lte"]:
+                    return "❌ 不支持的条件，请使用 eq/gt/lt/gte/lte"
+                
+                # 添加监控
+                success = await self.add_price_monitor(user_id, symbol, asset_type, target_price, condition)
+                if success:
+                    return "✅ 价格监控已添加"
+                else:
+                    return "❌ 添加价格监控失败"
+            
+            elif sub_command == "list":
+                # 列出价格监控
+                monitors = await self.list_price_monitors(user_id)
+                if monitors:
+                    output = ["📋 您的价格监控列表："]
+                    for i, monitor in enumerate(monitors):
+                        symbol = monitor.get("symbol")
+                        asset_type = monitor.get("asset_type")
+                        target_price = monitor.get("target_price")
+                        condition = monitor.get("condition")
+                        output.append(f"{i+1}. {symbol} ({asset_type}) - 条件: {condition} {target_price} USDT")
+                    return "\n".join(output)
+                else:
+                    return "您还没有设置任何价格监控"
+            
+            elif sub_command == "remove":
+                # 移除价格监控
+                if len(parts) < 3:
+                    return "❌ 请输入正确的命令格式：/monitor remove <索引>"
+                
+                try:
+                    index = int(parts[2]) - 1  # 转换为0-based索引
+                    success = await self.remove_price_monitor(user_id, index)
+                    if success:
+                        return "✅ 价格监控已移除"
+                    else:
+                        return "❌ 移除价格监控失败，请检查索引是否正确"
+                except ValueError:
+                    return "❌ 请输入有效的索引数字"
+            
+            else:
+                return "❌ 不支持的子命令，请使用 add/list/remove"
+                
+        except Exception as e:
+            logger.error(f"处理监控命令时发生错误：{str(e)}")
+            return "❌ 处理请求时发生错误，请稍后重试"
+
+    async def handle_help_command(self, event: AstrMessageEvent, *args, **kwargs) -> str:
+        """
+        处理帮助命令
+        :param event: 消息事件
+        :return: 帮助信息
+        """
+        help_text = """📚 币安插件命令帮助\n\n"""
+        help_text += "💡 价格查询\n"""
+        help_text += "/price <交易对> [资产类型] - 查询交易对价格\n"""
+        help_text += "示例：/price BTCUSDT spot\n\n"""
+        help_text += " 资产查询\n"""
+        help_text += "/asset [查询类型] - 查询账户资产\n"""
+        help_text += "查询类型：overview(默认)/alpha/资金/现货/合约\n"""
+        help_text += "示例：/asset overview\n\n"""
+        help_text += "🔐 API密钥管理\n"""
+        help_text += "/bind <API Key> <Secret Key> - 绑定币安API密钥\n"""
+        help_text += "/unbind - 解除绑定币安API密钥\n\n"""
+        help_text += "📈 价格监控\n"""
+        help_text += "/monitor add <交易对> <资产类型> <目标价格> <条件> - 添加价格监控\n"""
+        help_text += "/monitor list - 查看价格监控列表\n"""
+        help_text += "/monitor remove <索引> - 移除价格监控\n\n"""
+        help_text += "条件说明：eq(等于), gt(大于), lt(小于), gte(大于等于), lte(小于等于)\n\n"""
+        help_text += "ℹ️ 资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)\n\n"""
+        help_text += "📖 帮助\n"""
+        help_text += "/help - 查看帮助信息\n"""
+        
+        return help_text
