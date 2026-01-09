@@ -23,7 +23,7 @@ class BinancePlugin(Star):
 
     @filter.command("price")
     async def handle_price(self, event: AstrMessageEvent):
-        """查询币安资产价格，使用方法：/price <交易对> [资产类型]，例如：/price BTCUSDT futures\n资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)"""
+        """查询币安资产价格，使用方法：/price <交易对> [资产类型]，例如：/price BTCUSDT futures\n资产类型：spot(现货), futures(合约), margin(杠杆)"""
         result = await self.binance_core.handle_price_command(event)
         yield event.plain_result(result)
 
@@ -36,7 +36,7 @@ class BinancePlugin(Star):
     @filter.command("资产")
     async def handle_asset(self, event: AstrMessageEvent):
         """查询币安账户资产，使用方法：/资产 [查询类型]
-查询类型：alpha/资金/现货/合约，不输入则查询总览"""
+查询类型：资金/现货/合约，不输入则查询总览"""
         result = await self.binance_core.handle_asset_command(event)
         yield event.plain_result(result)
 
@@ -58,7 +58,7 @@ class BinancePlugin(Star):
 /监控 设置 <交易对> <资产类型> <目标价格> <方向> - 设置价格监控
 /监控 取消 <监控ID> - 取消指定的价格监控
 /监控 列表 - 查看您的所有价格监控
-资产类型：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)
+资产类型：spot(现货), futures(合约), margin(杠杆)
 方向：up(上涨到), down(下跌到)
 示例：/监控 设置 BTCUSDT futures 50000 up"""
         message_content = event.message_str.strip()
