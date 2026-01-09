@@ -29,8 +29,8 @@ class BinanceCore:
         self.encryption_key = None
         self.encryption_key_initialized = False
         
-        # 设置存储目录 - 使用 AstrBot 框架的数据目录
-        self.data_dir = "/root/AstrBot/data/plugins/astrbot_plugin_binance/data"
+        # 设置存储目录 - 使用相对路径
+        self.data_dir = "data"
         self.encryption_key_file = os.path.join(self.data_dir, "encryption_key.json")
         self.user_api_file = os.path.join(self.data_dir, "user_api_keys.json")
         self.price_monitor_file = os.path.join(self.data_dir, "price_monitors.json")
