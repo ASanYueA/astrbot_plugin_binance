@@ -6,7 +6,7 @@ import json
 import os
 from typing import Optional, Tuple
 from .crypto import encrypt_data, decrypt_data
-from astrbot.api import logger as plugin_logger
+from ..utils.logger import plugin_logger
 
 def _init_user_data_file(file_path: str) -> None:
     """初始化用户数据JSON文件（不存在则自动创建）"""
