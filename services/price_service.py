@@ -1,217 +1,247 @@
 """
-币安价格查询服务模块
+币安价格监控服务模块
 """
-import aiohttp
-from typing import Optional
+import os
+import json
+import asyncio
+import time
+import uuid
+from typing import Dict, Optional
 from astrbot.api import logger
+from .price_service import PriceService
 from ..utils.symbol import normalize_symbol
 
 
-class PriceService:
+class MonitorService:
     """
-    价格查询服务类，处理不同类型的价格查询请求
+    价格监控服务类，处理价格监控的设置、取消、检查等功能
     """
-    def __init__(self, session: aiohttp.ClientSession, config: dict):
-        self.session = session
-        self.config = config
-        self.api_url = self.config.get("binance_api_url", "https://api.binance.com")
-        self.timeout = self.config.get("request_timeout", 10)
+    def __init__(self, price_service: PriceService, data_dir: str, notification_callback=None):
+        self.price_service = price_service
+        self.data_dir = data_dir
+        self.price_monitor_file = os.path.join(self.data_dir, "price_monitors.json")
+        
+        # 确保数据目录存在
+        os.makedirs(self.data_dir, exist_ok=True)
+        
+        # 价格监控定时任务
+        self.price_monitor_task = None
+        self.monitor_interval = 60  # 默认每分钟检查一次
+        
+        # 通知回调函数
+        self.notification_callback = notification_callback
     
-    async def get_price(self, symbol: str, asset_type: str = "spot") -> Optional[float]:
+    async def load_price_monitors(self) -> Dict[str, Dict]:
         """
-        通过币安公共API查询交易对价格
-        :param symbol: 交易对，如BTCUSDT
-        :param asset_type: 资产类型，可选值：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)
-        :return: 价格，或None表示失败
+        加载价格监控数据
+        :return: 监控数据字典，格式为 {user_id: {monitor_id: monitor_data}}
         """
-        logger.info(f"开始查询价格：symbol={symbol}, asset_type={asset_type}")
         try:
-            # 标准化交易对格式
-            normalized_symbol = normalize_symbol(symbol)
-            
-            # 根据资产类型选择不同的API域名和端点
-            if asset_type == "spot":
-                # 现货API
-                api_domain = self.api_url
-                url = f"{api_domain}/api/v3/ticker/price"
-            elif asset_type == "futures":
-                # 永续合约API（使用不同的域名）
-                api_futures_url = self.config.get("api_futures_url", "https://fapi.binance.com")
-                api_domain = api_futures_url
-                url = f"{api_domain}/fapi/v1/ticker/price"
-            elif asset_type == "margin":
-                # 杠杆API
-                api_domain = self.api_url
-                url = f"{api_domain}/sapi/v1/margin/market-price"
-            elif asset_type == "alpha":
-                # Alpha货币 - 目前没有公开的价格API，返回对应现货价格
-                # 从配置中获取Alpha API域名，如果没有则使用默认值
-                api_alpha_url = self.config.get("api_alpha_url", self.api_url)
-                api_domain = api_alpha_url
-                url = f"{api_domain}/api/v3/ticker/price"
-            else:
-                logger.error(f"不支持的资产类型: {asset_type}")
-                return None
-            
-            params = {"symbol": normalized_symbol}
-            
-            logger.debug(f"查询{asset_type}价格：URL={url}, 参数={params}")
-            
-            async with self.session.get(url, params=params) as response:
-                logger.debug(f"API响应状态码: {response.status}, 响应头: {response.headers}")
-                
-                if response.status == 200:
-                    data = await response.json()
-                    logger.debug(f"API响应数据: {data}")
-                    # 不同API的返回字段可能略有不同
-                    if asset_type == "margin":
-                        return float(data.get("price", 0))
-                    else:
-                        return float(data.get("price", 0))
-                else:
-                    response_text = await response.text()
-                    logger.error(f"获取{asset_type}价格失败，状态码: {response.status}，响应内容: {response_text}")
-                    
-                    # 尝试解析错误响应
-                    try:
-                        error_data = await response.json()
-                        if "code" in error_data and "msg" in error_data:
-                            logger.error(f"API错误代码: {error_data['code']}, 错误信息: {error_data['msg']}")
-                    except Exception:
-                        pass
-                    
-                    # 如果是Alpha类型查询失败，尝试使用现货价格作为后备
-                    if asset_type == "alpha":
-                        logger.info(f"Alpha价格查询失败，尝试使用现货价格作为后备")
-                        try:
-                            spot_url = f"{self.api_url}/api/v3/ticker/price"
-                            async with self.session.get(spot_url, params=params) as spot_response:
-                                if spot_response.status == 200:
-                                    spot_data = await spot_response.json()
-                                    price = float(spot_data.get('price', 0))
-                                    logger.info(f"成功获取现货价格作为Alpha价格的后备: {price}")
-                                    return price
-                                else:
-                                    spot_response_text = await spot_response.text()
-                                    logger.error(f"现货价格查询也失败，状态码: {spot_response.status}，响应内容: {spot_response_text}")
-                        except Exception as e:
-                            logger.error(f"获取后备现货价格时发生错误: {str(e)}")
-                    
-                    logger.info(f"价格查询失败，返回None: symbol={symbol}, asset_type={asset_type}")
-                    return None
+            if os.path.exists(self.price_monitor_file):
+                with open(self.price_monitor_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            return {}
         except Exception as e:
-            logger.error(f"获取{asset_type}价格时发生错误: {str(e)}", exc_info=True)
-            return None
-
-    async def get_kline(self, symbol: str, asset_type: str = "spot", interval: str = "1h", limit: int = 200) -> Optional[list]:
+            logger.error(f"加载价格监控数据失败: {str(e)}")
+            return {}
+    
+    async def save_price_monitors(self, monitors: Dict[str, Dict]) -> bool:
         """
-        通过币安公共API查询K线数据
-        :param symbol: 交易对，如BTCUSDT
-        :param asset_type: 资产类型，可选值：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)
-        :param interval: 时间间隔，如1m, 5m, 15m, 30m, 1h, 4h, 1d
-        :param limit: 返回K线数量，默认200，最大1000
-        :return: K线数据列表，或None表示失败
+        保存价格监控数据
+        :param monitors: 监控数据字典
+        :return: 是否保存成功
         """
-        logger.info(f"开始查询K线：symbol={symbol}, asset_type={asset_type}, interval={interval}, limit={limit}")
         try:
-            # 验证交易对参数
-            if not symbol or len(symbol) < 4:
-                logger.error(f"交易对格式不正确: {symbol}")
-                return None
-            
-            # 标准化交易对格式
+            with open(self.price_monitor_file, "w", encoding="utf-8") as f:
+                json.dump(monitors, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception as e:
+            logger.error(f"保存价格监控数据失败: {str(e)}")
+            return False
+    
+    async def set_price_monitor(self, user_id: str, symbol: str, asset_type: str, 
+                               target_price: float, direction: str) -> Optional[str]:
+        """
+        设置价格监控
+        :param user_id: 用户ID
+        :param symbol: 交易对
+        :param asset_type: 资产类型
+        :param target_price: 目标价格
+        :param direction: 方向 (up/down)
+        :return: 监控ID或None（失败时）
+        """
+        try:
+            # 规范化交易对
             normalized_symbol = normalize_symbol(symbol)
             
-            # 验证交易对字符合法性
-            import re
-            if not re.match(r'^[A-Z]+$', normalized_symbol):
-                logger.error(f"交易对只能包含字母: {normalized_symbol}")
-                return None
+            # 生成唯一监控ID
+            monitor_id = str(uuid.uuid4())[:8]  # 使用UUID的前8位作为监控ID
             
-            # 验证时间间隔
-            valid_intervals = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
-            if interval not in valid_intervals:
-                logger.error(f"不支持的时间间隔: {interval}")
-                return None
+            # 加载现有监控数据
+            monitors = await self.load_price_monitors()
             
-            # 验证资产类型
-            valid_asset_types = ["spot", "futures", "margin", "alpha"]
-            if asset_type not in valid_asset_types:
-                logger.error(f"不支持的资产类型: {asset_type}")
-                return None
+            # 创建用户监控目录（如果不存在）
+            if user_id not in monitors:
+                monitors[user_id] = {}
             
-            # 限制limit的范围
-            limit = max(1, min(limit, 1000))
-            
-            # 根据资产类型选择不同的API域名和端点
-            if asset_type == "spot":
-                # 现货API
-                api_domain = self.api_url
-                url = f"{api_domain}/api/v3/klines"
-            elif asset_type == "futures":
-                # 永续合约API（使用不同的域名）
-                api_futures_url = self.config.get("api_futures_url", "https://fapi.binance.com")
-                api_domain = api_futures_url
-                url = f"{api_domain}/fapi/v1/klines"
-            elif asset_type == "margin":
-                # 杠杆API - 杠杆交易使用与现货相同的K线API
-                api_domain = self.api_url
-                url = f"{api_domain}/api/v3/klines"
-            elif asset_type == "alpha":
-                # Alpha货币 - 使用现货API
-                api_alpha_url = self.config.get("api_alpha_url", self.api_url)
-                api_domain = api_alpha_url
-                url = f"{api_domain}/api/v3/klines"
-            else:
-                logger.error(f"不支持的资产类型: {asset_type}")
-                return None
-            
-            params = {
+            # 创建监控记录
+            monitor_data = {
                 "symbol": normalized_symbol,
-                "interval": interval,
-                "limit": limit
+                "asset_type": asset_type,
+                "target_price": target_price,
+                "direction": direction,
+                "created_at": time.time(),
+                "is_active": True
             }
             
-            logger.debug(f"查询{asset_type}K线：URL={url}, 参数={params}")
+            # 保存监控记录
+            monitors[user_id][monitor_id] = monitor_data
             
-            # 设置请求超时
-            async with self.session.get(url, params=params, timeout=self.timeout) as response:
-                logger.debug(f"API响应状态码: {response.status}, 响应头: {response.headers}")
-                
-                if response.status == 200:
-                    data = await response.json()
-                    logger.debug(f"API响应数据: {data}")
-                    
-                    # 验证返回数据格式
-                    if isinstance(data, list) and data:
-                        logger.info(f"成功获取K线数据: symbol={symbol}, asset_type={asset_type}, interval={interval}, 数据条数={len(data)}")
-                        return data
-                    else:
-                        logger.error(f"API返回数据格式不正确: {data}")
-                        return None
-                else:
-                    response_text = await response.text()
-                    logger.error(f"获取{asset_type}K线失败，状态码: {response.status}，响应内容: {response_text}")
-                    
-                    # 尝试解析错误响应
-                    try:
-                        error_data = await response.json()
-                        if "code" in error_data and "msg" in error_data:
-                            logger.error(f"API错误代码: {error_data['code']}, 错误信息: {error_data['msg']}")
-                    except Exception:
-                        pass
-                    
-                    logger.info(f"K线查询失败，返回None: symbol={symbol}, asset_type={asset_type}, interval={interval}")
-                    return None
-        except aiohttp.ClientTimeout:
-            logger.error(f"获取{asset_type}K线超时: symbol={symbol}, interval={interval}")
-            return None
-        except aiohttp.ClientError as e:
-            logger.error(f"获取{asset_type}K线网络错误: {str(e)}", exc_info=True)
-            return None
-        except ValueError as e:
-            logger.error(f"获取{asset_type}K线数据解析错误: {str(e)}", exc_info=True)
-            return None
+            # 保存到文件
+            if await self.save_price_monitors(monitors):
+                return monitor_id
+            else:
+                return None
         except Exception as e:
-            logger.error(f"获取{asset_type}K线时发生错误: {str(e)}", exc_info=True)
+            logger.error(f"设置价格监控失败: {str(e)}")
             return None
+    
+    async def cancel_price_monitor(self, user_id: str, monitor_id: str) -> bool:
+        """
+        取消价格监控
+        :param user_id: 用户ID
+        :param monitor_id: 监控ID
+        :return: 是否取消成功
+        """
+        try:
+            # 加载现有监控数据
+            monitors = await self.load_price_monitors()
+            
+            # 检查用户是否有监控记录
+            if user_id not in monitors:
+                return False
+            
+            # 检查监控ID是否存在
+            if monitor_id not in monitors[user_id]:
+                return False
+            
+            # 删除监控记录
+            del monitors[user_id][monitor_id]
+            
+            # 如果用户没有其他监控记录，删除用户目录
+            if not monitors[user_id]:
+                del monitors[user_id]
+            
+            # 保存到文件
+            return await self.save_price_monitors(monitors)
+        except Exception as e:
+            logger.error(f"取消价格监控失败: {str(e)}")
+            return False
+    
+    async def get_user_monitors(self, user_id: str) -> Dict[str, Dict]:
+        """
+        获取用户的所有价格监控
+        :param user_id: 用户ID
+        :return: 用户的监控字典
+        """
+        try:
+            monitors = await self.load_price_monitors()
+            return monitors.get(user_id, {})
+        except Exception as e:
+            logger.error(f"获取用户监控列表失败: {str(e)}")
+            return {}
+    
+    async def _check_all_monitors(self) -> None:
+        """
+        检查所有用户的价格监控设置
+        """
+        try:
+            # 加载所有监控数据
+            monitors = await self.load_price_monitors()
+            
+            for user_id, user_monitors in monitors.items():
+                for monitor_id, monitor_data in list(user_monitors.items()):
+                    # 跳过非活跃监控
+                    if not monitor_data["is_active"]:
+                        continue
+                    
+                    symbol = monitor_data["symbol"]
+                    asset_type = monitor_data["asset_type"]
+                    target_price = monitor_data["target_price"]
+                    direction = monitor_data["direction"]
+                    
+                    # 获取当前价格
+                    current_price = await self.price_service.get_price(symbol, asset_type)
+                    
+                    if current_price is not None:
+                        # 检查价格是否满足监控条件
+                        if (direction == "up" and current_price >= target_price) or \
+                           (direction == "down" and current_price <= target_price):
+                            # 生成通知消息
+                            asset_type_text = {
+                                "spot": "现货",
+                                "futures": "合约",
+                                "margin": "杠杆",
+                                "alpha": "Alpha货币"
+                            }[asset_type]
+                            direction_text = "上涨到" if direction == "up" else "下跌到"
+                            
+                            # 价格监控触发，准备发送@用户通知
+                            notification_message = f"@{user_id} 您设置的{symbol} ({asset_type_text}) {direction_text} {target_price} USDT的监控已触发，当前价格为{current_price:.8f} USDT"
+                            
+                            # 记录日志
+                            logger.info(f"价格监控触发：{notification_message}")
+                            
+                            # 通过回调函数发送通知
+                            if self.notification_callback:
+                                try:
+                                    await self.notification_callback(notification_message)
+                                except Exception as e:
+                                    logger.error(f"发送通知失败：{str(e)}")
+                            
+                            # 触发后关闭监控，避免重复提醒
+                            monitor_data["is_active"] = False
+                            monitors[user_id][monitor_id] = monitor_data
+            
+            # 保存更新后的监控数据
+            await self.save_price_monitors(monitors)
+            
+        except Exception as e:
+            logger.error(f"检查价格监控时发生错误: {str(e)}")
+    
+    async def _price_monitor_task(self) -> None:
+        """
+        价格监控定时任务的实际执行函数
+        """
+        while True:
+            try:
+                await self._check_all_monitors()
+                await asyncio.sleep(self.monitor_interval)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"价格监控任务执行出错: {str(e)}")
+                await asyncio.sleep(self.monitor_interval)  # 出错后仍继续执行
+    
+    async def start_price_monitor(self, *args, **kwargs) -> None:
+        """
+        启动价格监控定时任务
+        """
+        if self.price_monitor_task is None or self.price_monitor_task.done():
+            self.price_monitor_task = asyncio.create_task(self._price_monitor_task())
+            logger.info("价格监控任务已启动")
+    
+    async def stop_price_monitor(self, *args, **kwargs) -> None:
+        """
+        停止价格监控定时任务
+        """
+        if self.price_monitor_task is not None and not self.price_monitor_task.done():
+            self.price_monitor_task.cancel()
+            try:
+                await self.price_monitor_task
+            except asyncio.CancelledError:
+                logger.info("价格监控任务已取消")
+            except Exception as e:
+                logger.error(f"停止价格监控任务时发生错误: {str(e)}")
+            finally:
+                self.price_monitor_task = None
