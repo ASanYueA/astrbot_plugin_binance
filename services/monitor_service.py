@@ -181,8 +181,7 @@ class MonitorService:
                             asset_type_text = {
                                 "spot": "现货",
                                 "futures": "合约",
-                                "margin": "杠杆",
-                                "alpha": "Alpha货币"
+                                "margin": "杠杆"
                             }[asset_type]
                             direction_text = "上涨到" if direction == "up" else "下跌到"
                             
