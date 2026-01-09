@@ -24,7 +24,6 @@ class PriceService:
         :param asset_type: 资产类型，可选值：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)
         :return: 价格，或None表示失败
         """
-        logger.info(f"开始查询价格：symbol={symbol}, asset_type={asset_type}")
         try:
             # 标准化交易对格式
             normalized_symbol = normalize_symbol(symbol)
@@ -88,19 +87,15 @@ class PriceService:
                             async with self.session.get(spot_url, params=params) as spot_response:
                                 if spot_response.status == 200:
                                     spot_data = await spot_response.json()
-                                    price = float(spot_data.get('price', 0))
-                                    logger.info(f"成功获取现货价格作为Alpha价格的后备: {price}")
-                                    return price
+                                    logger.info(f"成功获取现货价格作为Alpha价格的后备: {spot_data.get('price')}")
+                                    return float(spot_data.get('price', 0))
                                 else:
                                     spot_response_text = await spot_response.text()
                                     logger.error(f"现货价格查询也失败，状态码: {spot_response.status}，响应内容: {spot_response_text}")
                         except Exception as e:
                             logger.error(f"获取后备现货价格时发生错误: {str(e)}")
                     
-                    logger.info(f"价格查询失败，返回None: symbol={symbol}, asset_type={asset_type}")
                     return None
         except Exception as e:
-            logger.error(f"获取{asset_type}价格时发生错误: {str(e)}", exc_info=True)
+            logger.error(f"获取{asset_type}价格时发生错误: {str(e)}")
             return None
-
-
