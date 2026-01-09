@@ -21,7 +21,7 @@ class PriceService:
         """
         通过币安公共API查询交易对价格
         :param symbol: 交易对，如BTCUSDT
-        :param asset_type: 资产类型，可选值：spot(现货), futures(合约), margin(杠杆), alpha(Alpha货币)
+        :param asset_type: 资产类型，可选值：spot(现货), futures(合约), margin(杠杆)
         :return: 价格，或None表示失败
         """
         try:
@@ -42,12 +42,6 @@ class PriceService:
                 # 杠杆API
                 api_domain = self.api_url
                 url = f"{api_domain}/sapi/v1/margin/market-price"
-            elif asset_type == "alpha":
-                # Alpha货币 - 目前没有公开的价格API，返回对应现货价格
-                # 从配置中获取Alpha API域名，如果没有则使用默认值
-                api_alpha_url = self.config.get("api_alpha_url", self.api_url)
-                api_domain = api_alpha_url
-                url = f"{api_domain}/api/v3/ticker/price"
             else:
                 logger.error(f"不支持的资产类型: {asset_type}")
                 return None
@@ -78,22 +72,6 @@ class PriceService:
                             logger.error(f"API错误代码: {error_data['code']}, 错误信息: {error_data['msg']}")
                     except Exception:
                         pass
-                    
-                    # 如果是Alpha类型查询失败，尝试使用现货价格作为后备
-                    if asset_type == "alpha":
-                        logger.info(f"Alpha价格查询失败，尝试使用现货价格作为后备")
-                        try:
-                            spot_url = f"{self.api_url}/api/v3/ticker/price"
-                            async with self.session.get(spot_url, params=params) as spot_response:
-                                if spot_response.status == 200:
-                                    spot_data = await spot_response.json()
-                                    logger.info(f"成功获取现货价格作为Alpha价格的后备: {spot_data.get('price')}")
-                                    return float(spot_data.get('price', 0))
-                                else:
-                                    spot_response_text = await spot_response.text()
-                                    logger.error(f"现货价格查询也失败，状态码: {spot_response.status}，响应内容: {spot_response_text}")
-                        except Exception as e:
-                            logger.error(f"获取后备现货价格时发生错误: {str(e)}")
                     
                     return None
         except Exception as e:
