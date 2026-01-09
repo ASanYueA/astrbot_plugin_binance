@@ -29,9 +29,8 @@ class BinanceCore:
         self.encryption_key = None
         self.encryption_key_initialized = False
         
-        # 设置存储目录
-        self.plugin_dir = os.path.dirname(os.path.abspath(__file__))
-        self.data_dir = os.path.join(self.plugin_dir, "data")
+        # 设置存储目录 - 使用 AstrBot 框架的数据目录
+        self.data_dir = "/root/AstrBot/data/plugin_data/astrbot_plugin_binance"
         self.encryption_key_file = os.path.join(self.data_dir, "encryption_key.json")
         self.user_api_file = os.path.join(self.data_dir, "user_api_keys.json")
         self.price_monitor_file = os.path.join(self.data_dir, "price_monitors.json")
@@ -95,7 +94,11 @@ class BinanceCore:
         """
         try:
             # 标准化交易对格式
-            normalized_symbol = normalize_symbol(symbol)
+            try:
+                normalized_symbol = normalize_symbol(symbol)
+            except ValueError as e:
+                logger.error(f"获取{asset_type}价格时发生错误: {str(e)}")
+                return None
             
             # 根据资产类型选择不同的API域名和端点
             if asset_type == "spot":
